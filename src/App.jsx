@@ -22,6 +22,37 @@ const MONTH = monthKey()
 const COLORS = ["#3B82F6","#10B981","#F59E0B","#EF4444","#8B5CF6","#EC4899","#06B6D4","#84CC16"]
 const UNITS  = ["unidade","caixa","resma","pacote","litro","kg","par","rolo"]
 
+const YEAR_MIN = 2020
+const YEAR_MAX = 2050
+const MONTH_NAMES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+const ALL_YEARS = Array.from({length: YEAR_MAX - YEAR_MIN + 1}, (_,i) => YEAR_MIN + i)
+
+// Gera todas as chaves YYYY-MM de um ano
+const monthsOfYear = year => Array.from({length:12}, (_,i) => `${year}-${String(i+1).padStart(2,"0")}`)
+
+// Seletor de Mês/Ano dividido em dois <select> (ano + mês)
+function MonthYearPicker({value, onChange, label, className=""}) {
+  const [y, m] = value ? value.split("-") : [String(new Date().getFullYear()), String(new Date().getMonth()+1).padStart(2,"0")]
+  const setYear  = newY => onChange(`${newY}-${m}`)
+  const setMonth = newM => onChange(`${y}-${newM}`)
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      {label && <label className="text-sm font-medium text-slate-700 flex-shrink-0">{label}</label>}
+      <select value={y} onChange={e=>setYear(e.target.value)}
+        className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+        {ALL_YEARS.map(yr=><option key={yr} value={yr}>{yr}</option>)}
+      </select>
+      <select value={m} onChange={e=>setMonth(e.target.value)}
+        className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+        {MONTH_NAMES.map((name,i)=>{
+          const mv = String(i+1).padStart(2,"0")
+          return <option key={mv} value={mv}>{name}</option>
+        })}
+      </select>
+    </div>
+  )
+}
+
 // ─── Field map ────────────────────────────────────────────────────────────────
 const FM = {
   turma_id:"turmaId", user_id:"userId", req_id:"reqId",
@@ -286,7 +317,6 @@ function ConfiguracoesPage({db,saveKey,settings,reloadSettings}){
 
   // Orçamento padrão
   const [defBudget,setDefBudget]=useState(settings.default_budget_amount||"")
-  const months=Array.from({length:6},(_,i)=>{const d=new Date();d.setMonth(d.getMonth()+i-1);return monthKey(d)})
   const [applyMonth,setApplyMonth]=useState(MONTH)
 
   const saveIdentidade = async()=>{
@@ -396,7 +426,7 @@ function ConfiguracoesPage({db,saveKey,settings,reloadSettings}){
           <p className="text-sm text-slate-500">Define um valor padrão e o aplica a todas as turmas de uma vez para o mês selecionado.</p>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Valor padrão (R$)" required><Inp type="number" min="0" step="0.01" value={defBudget} onChange={e=>setDefBudget(e.target.value)} placeholder="500,00"/></Field>
-            <Field label="Mês de aplicação"><Sel value={applyMonth} onChange={e=>setApplyMonth(e.target.value)}>{months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}</Sel></Field>
+            <Field label="Mês de aplicação"><MonthYearPicker value={applyMonth} onChange={setApplyMonth}/></Field>
           </div>
           {db.turmas.length>0&&(
             <div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-800">
@@ -598,7 +628,6 @@ function InsumosPage({db,saveKey}){
 // ─── Orçamentos ───────────────────────────────────────────────────────────────
 function OrcamentosPage({db,saveKey}){
   const [selMonth,setSelMonth]=useState(MONTH); const [editing,setEditing]=useState({}); const [busy,setBusy]=useState(false)
-  const months=Array.from({length:6},(_,i)=>{const d=new Date();d.setMonth(d.getMonth()+i-2);return monthKey(d)})
   const getBudget=id=>db.budgets.find(b=>b.turmaId===id&&b.month===selMonth)
   const getSpent =id=>db.requisitions.filter(r=>r.turmaId===id&&r.month===selMonth&&r.status!=="rejected").reduce((s,r)=>s+r.total,0)
   const saveBudget=async(turmaId,amount)=>{ setBusy(true); const budgets=[...db.budgets]; const idx=budgets.findIndex(b=>b.turmaId===turmaId&&b.month===selMonth); if(idx>=0) budgets[idx]={...budgets[idx],amount:Number(amount)}; else budgets.push({id:uid(),turmaId,month:selMonth,amount:Number(amount)}); await saveKey("budgets",budgets); setEditing({}); setBusy(false) }
@@ -606,9 +635,8 @@ function OrcamentosPage({db,saveKey}){
   return(
     <PageWrap>
       <PageHeader title="Orçamentos" sub="Orçamento mensal por turma"/>
-      <div className="mb-6 flex items-center gap-3">
-        <label className="text-sm font-medium text-slate-700">Mês:</label>
-        <Sel value={selMonth} onChange={e=>setSelMonth(e.target.value)} className="w-auto">{months.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}</Sel>
+      <div className="mb-6">
+        <MonthYearPicker value={selMonth} onChange={setSelMonth} label="Mês de referência:"/>
       </div>
       <div className="space-y-3">
         {sorted.length===0&&<EmptyState icon={DollarSign} title="Nenhuma turma cadastrada"/>}
@@ -892,7 +920,6 @@ function NotificacoesPage({db,saveKey,setPage}){
 
 // ─── Relatórios ───────────────────────────────────────────────────────────────
 function RelatoriosPage({db}){
-  const allMonths=[...new Set(db.requisitions.map(r=>r.month).concat([MONTH]))].sort().reverse()
   const [selMonth,setSelMonth]=useState(MONTH)
   const data=sortAlpha(db.turmas,"name","asc").map(t=>{
     const reqs=db.requisitions.filter(r=>r.turmaId===t.id&&r.month===selMonth)
@@ -906,7 +933,9 @@ function RelatoriosPage({db}){
   return(
     <PageWrap>
       <PageHeader title="Relatórios de Consumo" sub="Por turma com detalhe do solicitante"/>
-      <div className="mb-6 flex items-center gap-3"><label className="text-sm font-medium text-slate-700">Mês:</label><Sel value={selMonth} onChange={e=>setSelMonth(e.target.value)} className="w-auto">{allMonths.map(m=><option key={m} value={m}>{monthLabel(m)}</option>)}</Sel></div>
+      <div className="mb-6">
+        <MonthYearPicker value={selMonth} onChange={setSelMonth} label="Mês:"/>
+      </div>
       {data.length===0&&<EmptyState icon={BarChart2} title="Sem dados neste período"/>}
       <div className="space-y-6">{data.map(d=>{const pct=d.budget>0?Math.min(100,(d.totalApproved/d.budget)*100):0; return(
         <Card key={d.turma.id}>
