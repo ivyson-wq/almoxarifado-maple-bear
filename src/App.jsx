@@ -928,7 +928,7 @@ function RelatoriosPage({db}){
             ))}</tbody>
           </table></div>
         </Card>
-      )})}
+      )})}</div>
     </PageWrap>
   )
 }
