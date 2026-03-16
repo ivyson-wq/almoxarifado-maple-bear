@@ -5,8 +5,8 @@ import {
   Home, Users, BookOpen, Package, DollarSign, ClipboardList, BarChart2,
   Bell, Plus, Edit2, Trash2, Check, X, LogOut, AlertTriangle, ShoppingCart,
   ChevronRight, CheckCircle, Loader2, Settings, Upload, Download, Mail,
-  ArrowUpAZ, ArrowDownAZ, Search, Truck, Calendar, Image as ImageIcon,
-  SlidersHorizontal
+  ArrowUpAZ, ArrowDownAZ, Search, Truck, Image as ImageIcon,
+  Tag, CheckSquare, Square, Clock
 } from "lucide-react"
 import { supabase } from "./supabase.js"
 
@@ -94,6 +94,10 @@ const getDeliveries = async reqId => {
   const {data,error}=await supabase.from("deliveries").select("*").eq("requisition_id",reqId).order("delivered_at",{ascending:false})
   if(error) throw error; return (data||[]).map(toApp)
 }
+const getAllDeliveries = async () => {
+  const {data,error}=await supabase.from("deliveries").select("*")
+  if(error) throw error; return (data||[]).map(toApp)
+}
 
 // ─── Email ────────────────────────────────────────────────────────────────────
 const sendEmail = async (cfg, toEmail, toName, subject, message) => {
@@ -124,15 +128,25 @@ const emailUser = async (user,cfg,req,approved,note,managerName) => {
 // ─── Excel ────────────────────────────────────────────────────────────────────
 const downloadTemplate = () => {
   const ws = XLSX.utils.aoa_to_sheet([
-    ["Nome *","Descricao","Unidade","Quantidade em Estoque *","Preco Unitario R$ *"],
-    ["Papel A4","Resma 500 folhas","resma",20,25.90],
-    ["Caneta Azul","Caixa c/50 esfero","caixa",8,18.50],
-    ["Cola Bastao","Cola bastao 40g","unidade",30,4.90],
+    ["Nome *","Descricao","Unidade","Quantidade em Estoque *","Preco Unitario R$ *","Categoria"],
+    ["Papel A4","Resma 500 folhas","resma",20,25.90,"Papel e Impressão"],
+    ["Caneta Azul","Caixa c/50 esfero","caixa",8,18.50,"Escrita e Desenho"],
   ])
-  ws["!cols"] = [{wch:25},{wch:30},{wch:12},{wch:25},{wch:22}]
+  ws["!cols"] = [{wch:25},{wch:30},{wch:12},{wch:25},{wch:22},{wch:20}]
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb,ws,"Insumos")
   XLSX.writeFile(wb,"modelo_insumos.xlsx")
+}
+const downloadUserTemplate = () => {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["Nome *","Email *","Senha *","Perfil (manager/user)","Turma (nome exato)"],
+    ["Profª Maria Silva","maria@escola.com","senha123","user","Bear Care"],
+    ["Gerente João","joao@escola.com","senha456","manager",""],
+  ])
+  ws["!cols"] = [{wch:25},{wch:30},{wch:15},{wch:22},{wch:20}]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb,ws,"Usuarios")
+  XLSX.writeFile(wb,"modelo_usuarios.xlsx")
 }
 const parseExcel = async file => {
   const buf = await file.arrayBuffer()
@@ -146,6 +160,21 @@ const parseExcel = async file => {
     unit: UNITS.includes(String(r[2]||"").trim()) ? String(r[2]).trim() : "unidade",
     stockQty: Number(r[3]||0),
     price: Number(r[4]||0),
+    categoryName: String(r[5]||"").trim(),
+  }))
+}
+const parseUserExcel = async (file, turmas) => {
+  const buf  = await file.arrayBuffer()
+  const wb   = XLSX.read(buf,{type:"buffer"})
+  const ws   = wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json(ws,{header:1})
+  return rows.slice(1).filter(r=>r[0]&&r[1]&&r[2]).map(r=>({
+    id: uid(),
+    name:     String(r[0]||"").trim(),
+    email:    String(r[1]||"").trim(),
+    password: String(r[2]||"").trim(),
+    role:     String(r[3]||"user").trim()==="manager" ? "manager" : "user",
+    turmaId:  turmas.find(t=>t.name.toLowerCase()===String(r[4]||"").trim().toLowerCase())?.id||null,
   }))
 }
 
@@ -168,6 +197,42 @@ const resizeLogo = file => new Promise(res => {
 // ─── Sort helper ──────────────────────────────────────────────────────────────
 const sortAlpha = (arr, field, dir) =>
   [...arr].sort((a,b) => dir==="asc" ? String(a[field]||"").localeCompare(String(b[field]||""),"pt-BR") : String(b[field]||"").localeCompare(String(a[field]||""),"pt-BR"))
+
+// ─── Budget Chart ─────────────────────────────────────────────────────────────
+function BudgetChart({turmas, budgets, requisitions}) {
+  const data = turmas.map(t => {
+    const budget = budgets.find(b=>b.turmaId===t.id&&b.month===MONTH)
+    const spent  = requisitions.filter(r=>r.turmaId===t.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+(r.approvedTotal??r.total),0)
+    return {name:t.name, color:t.color, budget:budget?.amount||0, spent}
+  }).filter(d=>d.budget>0)
+  if(!data.length) return <p className="text-sm text-slate-400 italic py-4 text-center">Nenhum orçamento definido para este mês.</p>
+  return (
+    <div className="space-y-3 mt-2">
+      {data.map(d => {
+        const pct  = d.budget>0 ? Math.min(100,(d.spent/d.budget)*100) : 0
+        const saldo = d.budget - d.spent
+        return (
+          <div key={d.name}>
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:d.color}}/>
+                <span className="text-xs font-medium text-slate-700">{d.name}</span>
+              </div>
+              <div className="text-right">
+                <span className="text-xs text-slate-500">{fmtCur(d.spent)} / {fmtCur(d.budget)}</span>
+                <span className={`ml-2 text-xs font-semibold ${saldo<0?"text-red-600":"text-emerald-600"}`}>{saldo>=0?"+":""}{fmtCur(saldo)}</span>
+              </div>
+            </div>
+            <div className="h-5 bg-slate-100 rounded-full overflow-hidden relative">
+              <div className="absolute left-0 top-0 h-full rounded-full transition-all" style={{width:`${pct}%`, background:pct>=90?"#EF4444":pct>=70?"#F59E0B":d.color, opacity:0.85}}/>
+              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-slate-600 mix-blend-multiply">{Math.round(pct)}% utilizado</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 function Modal({title,onClose,children,wide=false}){
@@ -208,13 +273,15 @@ const statusCfg={pending:{label:"Pendente",color:"yellow"},approved:{label:"Apro
 
 // ─── Login ────────────────────────────────────────────────────────────────────
 function LoginScreen({users,settings}){
-  const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [err,setErr]=useState(""); const [loggingIn,setLoggingIn]=useState(false)
+  const saved = JSON.parse(localStorage.getItem("alm_remember")||"{}")
+  const [email,setEmail]=useState(saved.email||""); const [pw,setPw]=useState(saved.pw||""); const [remember,setRemember]=useState(!!saved.email); const [err,setErr]=useState("")
   const schoolName = settings?.school_name || "Maple Bear"
   const logo = settings?.school_logo
-  const handle = async e => {
-    e.preventDefault(); setLoggingIn(true)
+  const handle = e => {
+    e.preventDefault()
     const u = users.find(u=>u.email.toLowerCase()===email.toLowerCase()&&u.password===pw)
-    if(u) window.__loginUser(u); else { setErr("E-mail ou senha incorretos."); setLoggingIn(false) }
+    if(u){ if(remember) localStorage.setItem("alm_remember",JSON.stringify({email,pw})); else localStorage.removeItem("alm_remember"); window.__loginUser(u) }
+    else setErr("E-mail ou senha incorretos.")
   }
   return(
     <div className="min-h-screen flex items-center justify-center p-4" style={{background:"linear-gradient(135deg,#0f172a 0%,#1e3a5f 100%)"}}>
@@ -228,8 +295,12 @@ function LoginScreen({users,settings}){
         <form onSubmit={handle} className="space-y-4">
           <Field label="E-mail" required><Inp type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="seu@email.com" required/></Field>
           <Field label="Senha" required><Inp type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••" required/></Field>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <div onClick={()=>setRemember(r=>!r)} className={`w-4 h-4 rounded border flex items-center justify-center transition ${remember?"bg-blue-600 border-blue-600":"border-slate-300"}`}>{remember&&<Check size={10} className="text-white"/>}</div>
+            <span className="text-sm text-slate-600">Lembrar e-mail e senha</span>
+          </label>
           {err&&<p className="text-sm text-red-600 text-center">{err}</p>}
-          <Btn type="submit" className="w-full justify-center" disabled={loggingIn}>{loggingIn&&<Loader2 size={14} className="animate-spin"/>} Entrar</Btn>
+          <Btn type="submit" className="w-full justify-center">Entrar</Btn>
         </form>
       </div>
     </div>
@@ -237,32 +308,59 @@ function LoginScreen({users,settings}){
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({db,user,setPage,notifCount,settings}){
+function Dashboard({db,user,setPage,notifCount,pendingDeliveries}){
   const isManager=user.role==="manager"
   const myTurma=db.turmas.find(t=>t.id===user.turmaId)
   const budget=myTurma?db.budgets.find(b=>b.turmaId===myTurma.id&&b.month===MONTH):null
-  const mySpent=myTurma?db.requisitions.filter(r=>r.turmaId===myTurma.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+r.total,0):0
+  const mySpent=myTurma?db.requisitions.filter(r=>r.turmaId===myTurma.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+(r.approvedTotal??r.total),0):0
   const pending=db.requisitions.filter(r=>r.status==="pending").length
   const lowStock=db.insumos.filter(i=>i.stockQty<=5).length
-  const recent=[...db.requisitions].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,6)
+  const recent=[...db.requisitions].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5)
   const getU=id=>db.users.find(u=>u.id===id); const getT=id=>db.turmas.find(t=>t.id===id)
   return(
     <PageWrap>
       <PageHeader title={`Olá, ${user.name.split(" ")[0]}! 👋`} sub={`${monthLabel(MONTH)} · ${isManager?"Visão Gerencial":myTurma?.name||""}`}/>
       {isManager?(
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {[{label:"Usuários",value:db.users.length,icon:Users,bg:"bg-blue-500",page:"usuarios"},
-            {label:"Turmas ativas",value:db.turmas.length,icon:BookOpen,bg:"bg-purple-500",page:"turmas"},
-            {label:"Aprovações pendentes",value:pending,icon:ClipboardList,bg:pending>0?"bg-amber-500":"bg-emerald-500",page:"aprovacoes"},
-            {label:"Estoque baixo",value:lowStock,icon:AlertTriangle,bg:lowStock>0?"bg-red-500":"bg-emerald-500",page:"insumos"},
-          ].map(s=>(
-            <Card key={s.label} className="p-5 cursor-pointer hover:shadow-md transition" onClick={()=>setPage(s.page)}>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className="text-white"/></div>
-              <p className="text-2xl font-bold text-slate-800">{s.value}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            {[{label:"Usuários",value:db.users.length,icon:Users,bg:"bg-blue-500",page:"usuarios"},
+              {label:"Turmas",value:db.turmas.length,icon:BookOpen,bg:"bg-purple-500",page:"turmas"},
+              {label:"Aprovações pendentes",value:pending,icon:ClipboardList,bg:pending>0?"bg-amber-500":"bg-emerald-500",page:"aprovacoes"},
+              {label:"Entregas pendentes",value:pendingDeliveries.length,icon:Truck,bg:pendingDeliveries.length>0?"bg-orange-500":"bg-emerald-500",page:"entregas"},
+            ].map(s=>(
+              <Card key={s.label} className="p-5 cursor-pointer hover:shadow-md transition" onClick={()=>setPage(s.page)}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${s.bg}`}><s.icon size={18} className="text-white"/></div>
+                <p className="text-2xl font-bold text-slate-800">{s.value}</p>
+                <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
+              </Card>
+            ))}
+          </div>
+          {pendingDeliveries.length>0&&(
+            <Card className="mb-6">
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-2"><Truck size={16} className="text-orange-500"/><h2 className="font-semibold text-slate-800">Itens aprovados aguardando entrega</h2><Badge color="orange">{pendingDeliveries.length}</Badge></div>
+                <Btn variant="ghost" size="sm" onClick={()=>setPage("entregas")}>Ver todas <ChevronRight size={14}/></Btn>
+              </div>
+              <div className="divide-y divide-slate-50">
+                {pendingDeliveries.slice(0,6).map((p,i)=>(
+                  <div key={i} className="px-5 py-3 flex items-center gap-4 hover:bg-slate-50 cursor-pointer" onClick={()=>setPage("entregas")}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:getT(p.turmaId)?.color||"#64748b"}}>{getT(p.turmaId)?.name[0]||"?"}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-slate-800">{p.itemName}</p>
+                      <p className="text-xs text-slate-400">{getT(p.turmaId)?.name} · Req. de {fmtDate(p.createdAt)}</p>
+                    </div>
+                    <Badge color="orange">{p.qty} {p.unit}</Badge>
+                  </div>
+                ))}
+                {pendingDeliveries.length>6&&<div className="px-5 py-3 text-center text-sm text-slate-400">+{pendingDeliveries.length-6} mais...</div>}
+              </div>
             </Card>
-          ))}
-        </div>
+          )}
+          <Card className="mb-6 p-5">
+            <h2 className="font-semibold text-slate-800 mb-1">Orçamento vs. Autorizado — {monthLabel(MONTH)}</h2>
+            <BudgetChart turmas={db.turmas} budgets={db.budgets} requisitions={db.requisitions}/>
+          </Card>
+        </>
       ):(
         <div className="grid grid-cols-2 gap-4 mb-8">
           <Card className="p-5"><p className="text-xs text-slate-500 mb-1">Orçamento do mês</p><p className="text-2xl font-bold text-slate-800">{fmtCur(budget?.amount||0)}</p><p className="text-xs text-slate-400 mt-1">{myTurma?.name}</p></Card>
@@ -278,8 +376,8 @@ function Dashboard({db,user,setPage,notifCount,settings}){
           <div className="divide-y divide-slate-50">
             {recent.map(r=>{const u=getU(r.userId);const t=getT(r.turmaId);const sc=statusCfg[r.status]; return(
               <div key={r.id} className="px-5 py-3 flex items-center gap-3">
-                <div className="flex-1 min-w-0"><p className="text-sm font-medium text-slate-800 truncate">{u?.name} <span className="text-slate-400 font-normal">· {t?.name}</span></p><p className="text-xs text-slate-400">{fmtDate(r.createdAt)} · {r.items?.length||0} item(s)</p></div>
-                <div className="text-right flex-shrink-0"><p className="text-sm font-semibold text-slate-800">{fmtCur(r.total)}</p><Badge color={sc?.color}>{sc?.label}</Badge></div>
+                <div className="flex-1 min-w-0"><p className="text-sm font-medium text-slate-800 truncate">{u?.name} <span className="text-slate-400 font-normal">· {t?.name}</span></p><p className="text-xs text-slate-400">{fmtDate(r.createdAt)}</p></div>
+                <div className="text-right flex-shrink-0"><p className="text-sm font-semibold text-slate-800">{fmtCur(r.approvedTotal??r.total)}</p><Badge color={sc?.color}>{sc?.label}</Badge></div>
               </div>
             )})}
           </div>
@@ -292,6 +390,95 @@ function Dashboard({db,user,setPage,notifCount,settings}){
           <p className="text-sm text-amber-800">Você tem <strong>{notifCount}</strong> notificação(ões) não lida(s).</p>
           <Btn variant="secondary" size="sm" onClick={()=>setPage("notificacoes")} className="ml-auto flex-shrink-0">Ver</Btn>
         </div>
+      )}
+    </PageWrap>
+  )
+}
+
+// ─── Entregas ─────────────────────────────────────────────────────────────────
+function EntregasPage({db,user,pendingDeliveries,reload}){
+  const[selReq,setSelReq]=useState(null);const[deliveries,setDeliveries]=useState([]);const[busy,setBusy]=useState(false)
+  const[delivForm,setDelivForm]=useState({deliveredAt:today(),notes:"",items:[]});const[search,setSearch]=useState("")
+  const getU=id=>db.users.find(u=>u.id===id);const getT=id=>db.turmas.find(t=>t.id===id)
+  const reqIds=[...new Set(pendingDeliveries.map(p=>p.reqId))]
+  const pendingReqs=db.requisitions.filter(r=>reqIds.includes(r.id))
+    .filter(r=>{ const t=getT(r.turmaId); return t?.name.toLowerCase().includes(search.toLowerCase())||getU(r.userId)?.name.toLowerCase().includes(search.toLowerCase()) })
+    .sort((a,b)=>new Date(a.createdAt)-new Date(b.createdAt))
+  const openReq=async r=>{
+    setSelReq(r); setBusy(true); const d=await getDeliveries(r.id); setDeliveries(d)
+    const pend=pendingDeliveries.filter(p=>p.reqId===r.id)
+    setDelivForm({deliveredAt:today(),notes:"",items:pend.map(p=>({insumoId:p.insumoId,name:p.itemName,unit:p.unit,qty:p.qty,delivQty:p.qty}))})
+    setBusy(false)
+  }
+  const saveDelivery=async()=>{
+    setBusy(true)
+    const d={id:uid(),requisitionId:selReq.id,items:delivForm.items.filter(i=>i.delivQty>0).map(i=>({insumoId:i.insumoId,name:i.name,unit:i.unit,qty:i.delivQty})),deliveredAt:delivForm.deliveredAt,notes:delivForm.notes,createdBy:user.id,createdAt:ts()}
+    await addDelivery(d); await reload(); setSelReq(null); setBusy(false)
+  }
+  return(
+    <PageWrap>
+      <PageHeader title="Registro de Entregas" sub={`${pendingReqs.length} requisição(ões) com entrega pendente`}/>
+      {pendingReqs.length===0?<EmptyState icon={CheckCircle} title="Tudo entregue!" sub="Sem requisições aprovadas aguardando entrega."/>:(
+        <>
+          <div className="mb-4"><SearchBar value={search} onChange={setSearch} placeholder="Buscar por turma ou solicitante..."/></div>
+          <div className="space-y-3">
+            {pendingReqs.map(r=>{
+              const items=pendingDeliveries.filter(p=>p.reqId===r.id)
+              const t=getT(r.turmaId); const u=getU(r.userId)
+              return(
+                <Card key={r.id} className="p-4 hover:shadow-md transition cursor-pointer" onClick={()=>openReq(r)}>
+                  <div className="flex items-start gap-4">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold flex-shrink-0" style={{background:t?.color||"#64748b"}}>{t?.name[0]||"?"}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-slate-800">{t?.name}</p>
+                      <p className="text-xs text-slate-500">Solicitado por {u?.name} em {fmtDate(r.createdAt)}</p>
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {items.map((p,i)=><span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-50 border border-orange-200 rounded-full text-xs text-orange-700"><Package size={10}/>{p.qty} {p.unit} {p.itemName}</span>)}
+                      </div>
+                    </div>
+                    <Btn size="sm" variant="success"><Truck size={14}/> Registrar</Btn>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+        </>
+      )}
+      {selReq&&(
+        <Modal title={`Entrega — ${getT(selReq.turmaId)?.name}`} onClose={()=>setSelReq(null)} wide>
+          <div className="space-y-4">
+            {deliveries.length>0&&(
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Entregas anteriores</p>
+                {deliveries.map(d=>(
+                  <div key={d.id} className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-2 text-sm">
+                    <div className="flex items-center gap-2 mb-1"><Truck size={14} className="text-emerald-600"/><strong className="text-emerald-800">{fmtDate(d.deliveredAt)}</strong></div>
+                    <p className="text-xs text-emerald-700">{d.items?.map(i=>`${i.qty}x ${i.name}`).join(", ")}</p>
+                    {d.notes&&<p className="text-xs text-emerald-600 mt-1 italic">{d.notes}</p>}
+                  </div>
+                ))}
+                <hr className="border-slate-100 my-3"/>
+              </div>
+            )}
+            <Field label="Data da entrega" required><Inp type="date" value={delivForm.deliveredAt} onChange={e=>setDelivForm(f=>({...f,deliveredAt:e.target.value}))}/></Field>
+            <Field label="Itens a entregar">
+              <div className="space-y-2">
+                {delivForm.items.map((item,idx)=>(
+                  <div key={idx} className="flex items-center gap-3 bg-slate-50 px-3 py-2.5 rounded-xl">
+                    <div className="flex-1 min-w-0"><p className="text-sm font-medium text-slate-800">{item.name}</p><p className="text-xs text-slate-400">{item.unit} · pendente: {item.qty}</p></div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={()=>setDelivForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,delivQty:Math.max(0,x.delivQty-1)}:x)}))} className="w-7 h-7 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center font-bold">−</button>
+                      <span className="w-8 text-center text-sm font-semibold">{item.delivQty}</span>
+                      <button onClick={()=>setDelivForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,delivQty:Math.min(x.qty,x.delivQty+1)}:x)}))} className="w-7 h-7 rounded-lg bg-slate-200 hover:bg-slate-300 flex items-center justify-center font-bold">+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Field>
+            <Field label="Observações"><textarea value={delivForm.notes} onChange={e=>setDelivForm(f=>({...f,notes:e.target.value}))} rows={2} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Observações sobre esta entrega..."/></Field>
+            <div className="flex justify-end gap-2"><Btn variant="secondary" onClick={()=>setSelReq(null)}>Cancelar</Btn><Btn variant="success" disabled={busy||delivForm.items.every(i=>i.delivQty===0)} onClick={saveDelivery}>{busy&&<Loader2 size={14} className="animate-spin"/>}<Truck size={14}/> Confirmar</Btn></div>
+          </div>
+        </Modal>
       )}
     </PageWrap>
   )
@@ -445,13 +632,24 @@ function ConfiguracoesPage({db,saveKey,settings,reloadSettings}){
 function UsuariosPage({db,saveKey}){
   const [modal,setModal]=useState(null); const [form,setForm]=useState({name:"",email:"",password:"",role:"user",turmaId:""}); const [del,setDel]=useState(null); const [busy,setBusy]=useState(false)
   const [search,setSearch]=useState(""); const [sort,setSort]=useState("asc")
+  const [importModal,setImportModal]=useState(false); const [importRows,setImportRows]=useState([]); const [importing,setImporting]=useState(false)
+  const fileRef=useRef()
   const F=k=>e=>setForm(f=>({...f,[k]:e.target.value}))
   const filtered = sortAlpha(db.users.filter(u=>u.name.toLowerCase().includes(search.toLowerCase())||u.email.toLowerCase().includes(search.toLowerCase())),"name",sort)
   const save=async()=>{ setBusy(true); const users=[...db.users]; if(modal.mode==="add") users.push({...form,id:uid(),turmaId:form.turmaId||null}); else{const i=users.findIndex(u=>u.id===modal.data.id);users[i]={...users[i],...form,turmaId:form.turmaId||null}}; await saveKey("users",users); setModal(null); setBusy(false) }
   const remove=async id=>{ setBusy(true); await saveKey("users",db.users.filter(u=>u.id!==id)); setDel(null); setBusy(false) }
+  const handleFile=async e=>{ const f=e.target.files[0]; if(!f) return; const rows=await parseUserExcel(f,db.turmas); setImportRows(rows); setImportModal(true); e.target.value="" }
+  const confirmImport=async()=>{ setImporting(true); const users=[...db.users]; for(const row of importRows){ const ex=users.findIndex(u=>u.email.toLowerCase()===row.email.toLowerCase()); if(ex>=0) users[ex]={...users[ex],...row}; else users.push(row) }; await saveKey("users",users); setImportModal(false); setImportRows([]); setImporting(false) }
   return(
     <PageWrap>
-      <PageHeader title="Usuários" sub={`${db.users.length} cadastrado(s)`} action={<Btn onClick={()=>{setForm({name:"",email:"",password:"",role:"user",turmaId:""});setModal({mode:"add"})}}><Plus size={16}/>Novo usuário</Btn>}/>
+      <PageHeader title="Usuários" sub={`${db.users.length} cadastrado(s)`} action={
+        <div className="flex gap-2">
+          <Btn variant="secondary" size="sm" onClick={downloadUserTemplate}><Download size={14}/> Modelo Excel</Btn>
+          <Btn variant="secondary" size="sm" onClick={()=>fileRef.current.click()}><Upload size={14}/> Importar Excel</Btn>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile}/>
+          <Btn onClick={()=>{setForm({name:"",email:"",password:"",role:"user",turmaId:""});setModal({mode:"add"})}}><Plus size={16}/>Novo usuário</Btn>
+        </div>
+      }/>
       <Card>
         <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3">
           <SearchBar value={search} onChange={setSearch} placeholder="Buscar por nome ou e-mail..."/>
@@ -461,15 +659,18 @@ function UsuariosPage({db,saveKey}){
           <table className="w-full">
             <thead><tr className="border-b border-slate-100">{["Nome","E-mail","Perfil","Turma",""].map(h=><th key={h} className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-50">
-              {filtered.map(u=>(
-                <tr key={u.id} className="hover:bg-slate-50">
-                  <td className="px-5 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-sm font-bold">{u.name[0]}</div><span className="text-sm font-medium text-slate-800">{u.name}</span></div></td>
-                  <td className="px-5 py-3 text-sm text-slate-600">{u.email}</td>
-                  <td className="px-5 py-3"><Badge color={u.role==="manager"?"purple":"blue"}>{u.role==="manager"?"Gerente":"Usuário"}</Badge></td>
-                  <td className="px-5 py-3 text-sm text-slate-600">{db.turmas.find(t=>t.id===u.turmaId)?.name||"—"}</td>
-                  <td className="px-5 py-3"><div className="flex items-center justify-end gap-1"><Btn variant="ghost" size="sm" onClick={()=>{setForm({name:u.name,email:u.email,password:u.password,role:u.role,turmaId:u.turmaId||""});setModal({mode:"edit",data:u})}}><Edit2 size={14}/></Btn><Btn variant="ghost" size="sm" onClick={()=>setDel(u)} className="text-red-500 hover:bg-red-50"><Trash2 size={14}/></Btn></div></td>
-                </tr>
-              ))}
+              {filtered.map(u=>{
+                const turma=db.turmas.find(t=>t.id===u.turmaId)
+                return(
+                  <tr key={u.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 text-sm font-bold">{u.name[0]}</div><span className="text-sm font-medium text-slate-800">{u.name}</span></div></td>
+                    <td className="px-5 py-3 text-sm text-slate-600">{u.email}</td>
+                    <td className="px-5 py-3"><Badge color={u.role==="manager"?"purple":"blue"}>{u.role==="manager"?"Gerente":"Usuário"}</Badge></td>
+                    <td className="px-5 py-3">{turma?<div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:turma.color}}/><span className="text-sm font-medium text-slate-700">{turma.name}</span></div>:<span className="text-sm text-slate-400">—</span>}</td>
+                    <td className="px-5 py-3"><div className="flex items-center justify-end gap-1"><Btn variant="ghost" size="sm" onClick={()=>{setForm({name:u.name,email:u.email,password:u.password,role:u.role,turmaId:u.turmaId||""});setModal({mode:"edit",data:u})}}><Edit2 size={14}/></Btn><Btn variant="ghost" size="sm" onClick={()=>setDel(u)} className="text-red-500 hover:bg-red-50"><Trash2 size={14}/></Btn></div></td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
           {filtered.length===0&&<EmptyState icon={Users} title="Nenhum usuário encontrado"/>}
@@ -484,6 +685,17 @@ function UsuariosPage({db,saveKey}){
             <Field label="Perfil" required><Sel value={form.role} onChange={F("role")}><option value="user">Usuário (Professor/Funcionário)</option><option value="manager">Gerente</option></Sel></Field>
             {form.role==="user"&&<Field label="Turma vinculada"><Sel value={form.turmaId} onChange={F("turmaId")}><option value="">Sem turma</option>{db.turmas.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</Sel></Field>}
             <div className="flex justify-end gap-2 pt-2"><Btn variant="secondary" onClick={()=>setModal(null)}>Cancelar</Btn><Btn onClick={save} disabled={!form.name||!form.email||!form.password||busy}>{modal.mode==="add"?"Criar":"Salvar"}</Btn></div>
+          </div>
+        </Modal>
+      )}
+      {importModal&&(
+        <Modal title={`Importar ${importRows.length} usuário(s) do Excel`} onClose={()=>setImportModal(false)} wide>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">E-mails já existentes serão <strong>atualizados</strong>. Novos serão <strong>adicionados</strong>.</p>
+            <div className="overflow-auto max-h-64"><table className="w-full text-sm"><thead className="sticky top-0 bg-slate-50"><tr>{["Nome","E-mail","Perfil","Turma"].map(h=><th key={h} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
+              <tbody>{importRows.map((r,i)=><tr key={i} className={db.users.find(u=>u.email.toLowerCase()===r.email.toLowerCase())?"bg-amber-50":"bg-emerald-50"}><td className="px-3 py-2 font-medium">{r.name}</td><td className="px-3 py-2">{r.email}</td><td className="px-3 py-2"><Badge color={r.role==="manager"?"purple":"blue"}>{r.role==="manager"?"Gerente":"Usuário"}</Badge></td><td className="px-3 py-2">{db.turmas.find(t=>t.id===r.turmaId)?.name||"—"}</td></tr>)}</tbody>
+            </table></div>
+            <div className="flex justify-end gap-2"><Btn variant="secondary" onClick={()=>setImportModal(false)}>Cancelar</Btn><Btn onClick={confirmImport} disabled={importing}>{importing&&<Loader2 size={14} className="animate-spin"/>} Confirmar importação</Btn></div>
           </div>
         </Modal>
       )}
@@ -536,42 +748,52 @@ function TurmasPage({db,saveKey}){
 
 // ─── Insumos ──────────────────────────────────────────────────────────────────
 function InsumosPage({db,saveKey}){
-  const [modal,setModal]=useState(null); const [form,setForm]=useState({name:"",description:"",unit:"unidade",stockQty:"",price:""}); const [del,setDel]=useState(null); const [busy,setBusy]=useState(false)
-  const [search,setSearch]=useState(""); const [sort,setSort]=useState("asc")
+  const [modal,setModal]=useState(null); const [form,setForm]=useState({name:"",description:"",unit:"unidade",stockQty:"",price:"",categoryId:""}); const [del,setDel]=useState(null); const [busy,setBusy]=useState(false)
+  const [search,setSearch]=useState(""); const [sort,setSort]=useState("asc"); const [filterCat,setFilterCat]=useState("")
   const [importModal,setImportModal]=useState(false); const [importRows,setImportRows]=useState([]); const [importing,setImporting]=useState(false)
-  const fileRef=useRef()
-  const filtered=sortAlpha(db.insumos.filter(i=>i.name.toLowerCase().includes(search.toLowerCase())||i.description?.toLowerCase().includes(search.toLowerCase())),"name",sort)
-  const F=k=>e=>setForm(f=>({...f,[k]:e.target.value}))
-  const save=async()=>{ setBusy(true); const ins=[...db.insumos]; const item={...form,stockQty:Number(form.stockQty),price:Number(form.price)}; if(modal.mode==="add") ins.push({...item,id:uid()}); else{const idx=ins.findIndex(x=>x.id===modal.data.id);ins[idx]={...ins[idx],...item}}; await saveKey("insumos",ins); setModal(null); setBusy(false) }
+  const [catModal,setCatModal]=useState(false); const [catForm,setCatForm]=useState({name:""}); const [catEdit,setCatEdit]=useState(null)
+  const fileRef=useRef(); const F=k=>e=>setForm(f=>({...f,[k]:e.target.value}))
+  const cats=sortAlpha(db.categories||[],"name","asc")
+  const filtered=sortAlpha(db.insumos.filter(i=>(i.name.toLowerCase().includes(search.toLowerCase())||i.description?.toLowerCase().includes(search.toLowerCase()))&&(!filterCat||i.categoryId===filterCat)),"name",sort)
+  const save=async()=>{ setBusy(true); const ins=[...db.insumos]; const item={...form,stockQty:Number(form.stockQty),price:Number(form.price),categoryId:form.categoryId||null}; if(modal.mode==="add") ins.push({...item,id:uid()}); else{const idx=ins.findIndex(x=>x.id===modal.data.id);ins[idx]={...ins[idx],...item}}; await saveKey("insumos",ins); setModal(null); setBusy(false) }
   const handleFile=async e=>{ const f=e.target.files[0]; if(!f) return; const rows=await parseExcel(f); setImportRows(rows); setImportModal(true); e.target.value="" }
-  const confirmImport=async()=>{ setImporting(true); const ins=[...db.insumos]; for(const row of importRows){ const existing=ins.findIndex(i=>i.name.toLowerCase()===row.name.toLowerCase()); if(existing>=0) ins[existing]={...ins[existing],description:row.description,unit:row.unit,stockQty:row.stockQty,price:row.price}; else ins.push(row) }; await saveKey("insumos",ins); setImportModal(false); setImportRows([]); setImporting(false) }
+  const confirmImport=async()=>{ setImporting(true); const ins=[...db.insumos]; for(const row of importRows){ const catId=cats.find(c=>c.name.toLowerCase()===row.categoryName?.toLowerCase())?.id||null; const existing=ins.findIndex(i=>i.name.toLowerCase()===row.name.toLowerCase()); if(existing>=0) ins[existing]={...ins[existing],description:row.description,unit:row.unit,stockQty:row.stockQty,price:row.price,categoryId:catId}; else ins.push({...row,categoryId:catId}) }; await saveKey("insumos",ins); setImportModal(false); setImportRows([]); setImporting(false) }
+  const saveCat=async()=>{ setBusy(true); const c=[...(db.categories||[])]; if(catEdit){const i=c.findIndex(x=>x.id===catEdit.id);c[i]={...c[i],name:catForm.name}}else c.push({id:uid(),name:catForm.name}); await saveKey("categories",c); setCatEdit(null); setCatForm({name:""}); setBusy(false) }
+  const delCat=async id=>saveKey("categories",(db.categories||[]).filter(c=>c.id!==id))
+  const getCatName=id=>cats.find(c=>c.id===id)?.name||""
   const stockColor=qty=>qty<=0?"red":qty<=5?"yellow":"green"
   return(
     <PageWrap>
       <PageHeader title="Insumos / Estoque" sub={`${db.insumos.length} item(s)`} action={
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Btn variant="secondary" size="sm" onClick={()=>setCatModal(true)}><Tag size={14}/> Categorias</Btn>
           <Btn variant="secondary" size="sm" onClick={downloadTemplate}><Download size={14}/> Modelo Excel</Btn>
           <Btn variant="secondary" size="sm" onClick={()=>fileRef.current.click()}><Upload size={14}/> Importar Excel</Btn>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile}/>
-          <Btn onClick={()=>{setForm({name:"",description:"",unit:"unidade",stockQty:"",price:""});setModal({mode:"add"})}}><Plus size={16}/>Novo insumo</Btn>
+          <Btn onClick={()=>{setForm({name:"",description:"",unit:"unidade",stockQty:"",price:"",categoryId:""});setModal({mode:"add"})}}><Plus size={16}/>Novo insumo</Btn>
         </div>
       }/>
       <Card>
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3">
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3 flex-wrap">
           <SearchBar value={search} onChange={setSearch} placeholder="Buscar insumo..."/>
+          <Sel value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="w-auto text-sm">
+            <option value="">Todas categorias</option>
+            {cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </Sel>
           <SortBtn dir={sort} onToggle={()=>setSort(s=>s==="asc"?"desc":"asc")}/>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead><tr className="border-b border-slate-100">{["Nome","Unidade","Estoque","Preço Unit.",""].map(h=><th key={h} className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
+            <thead><tr className="border-b border-slate-100">{["Nome","Categoria","Unidade","Estoque","Preço Unit.",""].map(h=><th key={h} className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-50">
               {filtered.map(i=>(
                 <tr key={i.id} className="hover:bg-slate-50">
                   <td className="px-5 py-3"><p className="text-sm font-medium text-slate-800">{i.name}</p>{i.description&&<p className="text-xs text-slate-400">{i.description}</p>}</td>
+                  <td className="px-5 py-3">{i.categoryId?<Badge color="slate">{getCatName(i.categoryId)}</Badge>:<span className="text-xs text-slate-300">—</span>}</td>
                   <td className="px-5 py-3 text-sm text-slate-600">{i.unit}</td>
                   <td className="px-5 py-3"><Badge color={stockColor(i.stockQty)}>{i.stockQty} {i.unit}</Badge></td>
                   <td className="px-5 py-3 text-sm font-semibold text-slate-800">{fmtCur(i.price)}</td>
-                  <td className="px-5 py-3"><div className="flex items-center justify-end gap-1"><Btn variant="ghost" size="sm" onClick={()=>{setForm({name:i.name,description:i.description||"",unit:i.unit,stockQty:String(i.stockQty),price:String(i.price)});setModal({mode:"edit",data:i})}}><Edit2 size={14}/></Btn><Btn variant="ghost" size="sm" onClick={()=>setDel(i)} className="text-red-500 hover:bg-red-50"><Trash2 size={14}/></Btn></div></td>
+                  <td className="px-5 py-3"><div className="flex items-center justify-end gap-1"><Btn variant="ghost" size="sm" onClick={()=>{setForm({name:i.name,description:i.description||"",unit:i.unit,stockQty:String(i.stockQty),price:String(i.price),categoryId:i.categoryId||""});setModal({mode:"edit",data:i})}}><Edit2 size={14}/></Btn><Btn variant="ghost" size="sm" onClick={()=>setDel(i)} className="text-red-500 hover:bg-red-50"><Trash2 size={14}/></Btn></div></td>
                 </tr>
               ))}
             </tbody>
@@ -585,6 +807,7 @@ function InsumosPage({db,saveKey}){
           <div className="space-y-4">
             <Field label="Nome" required><Inp value={form.name} onChange={F("name")} placeholder="Ex: Papel A4"/></Field>
             <Field label="Descrição"><Inp value={form.description} onChange={F("description")} placeholder="Ex: Resma 500 folhas"/></Field>
+            <Field label="Categoria"><Sel value={form.categoryId} onChange={F("categoryId")}><option value="">Sem categoria</option>{cats.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</Sel></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Unidade" required><Sel value={form.unit} onChange={F("unit")}>{UNITS.map(u=><option key={u}>{u}</option>)}</Sel></Field>
               <Field label="Qtde em estoque" required><Inp type="number" min="0" value={form.stockQty} onChange={F("stockQty")} placeholder="0"/></Field>
@@ -595,31 +818,44 @@ function InsumosPage({db,saveKey}){
         </Modal>
       )}
 
+      {catModal&&(
+        <Modal title="Gerenciar Categorias" onClose={()=>{setCatModal(false);setCatEdit(null);setCatForm({name:""})}}>
+          <div className="space-y-4">
+            <div className="flex gap-2">
+              <Inp value={catForm.name} onChange={e=>setCatForm({name:e.target.value})} placeholder="Nome da categoria" className="flex-1"/>
+              <Btn disabled={!catForm.name||busy} onClick={saveCat}>{catEdit?"Salvar":"Adicionar"}</Btn>
+              {catEdit&&<Btn variant="secondary" onClick={()=>{setCatEdit(null);setCatForm({name:""})}}>Cancelar</Btn>}
+            </div>
+            <div className="divide-y divide-slate-50 max-h-64 overflow-y-auto">
+              {cats.length===0&&<p className="text-sm text-slate-400 text-center py-4">Nenhuma categoria ainda</p>}
+              {cats.map(c=>(
+                <div key={c.id} className="flex items-center gap-3 py-2.5">
+                  <Tag size={14} className="text-slate-400 flex-shrink-0"/>
+                  <span className="flex-1 text-sm text-slate-800">{c.name}</span>
+                  <span className="text-xs text-slate-400">{db.insumos.filter(i=>i.categoryId===c.id).length} item(s)</span>
+                  <Btn variant="ghost" size="sm" onClick={()=>{setCatEdit(c);setCatForm({name:c.name})}}><Edit2 size={12}/></Btn>
+                  <Btn variant="ghost" size="sm" className="text-red-500 hover:bg-red-50" onClick={()=>delCat(c.id)}><Trash2 size={12}/></Btn>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {importModal&&(
         <Modal title={`Importar ${importRows.length} insumo(s) do Excel`} onClose={()=>setImportModal(false)} wide>
           <div className="space-y-4">
-            <p className="text-sm text-slate-600">Itens existentes com o mesmo nome serão <strong>atualizados</strong>. Novos itens serão <strong>adicionados</strong>.</p>
+            <p className="text-sm text-slate-600">Itens com mesmo nome serão <strong>atualizados</strong>. Novos serão <strong>adicionados</strong>.</p>
             <div className="overflow-x-auto max-h-72 overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-slate-50"><tr>{["Nome","Descrição","Unidade","Estoque","Preço"].map(h=><th key={h} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
-                <tbody className="divide-y divide-slate-50">
-                  {importRows.map((r,i)=>(
-                    <tr key={i} className={db.insumos.find(x=>x.name.toLowerCase()===r.name.toLowerCase())?"bg-amber-50":"bg-emerald-50"}>
-                      <td className="px-3 py-2 font-medium">{r.name} {db.insumos.find(x=>x.name.toLowerCase()===r.name.toLowerCase())&&<Badge color="yellow">atualizar</Badge>}</td>
-                      <td className="px-3 py-2 text-slate-500">{r.description||"—"}</td>
-                      <td className="px-3 py-2">{r.unit}</td>
-                      <td className="px-3 py-2">{r.stockQty}</td>
-                      <td className="px-3 py-2">{fmtCur(r.price)}</td>
-                    </tr>
-                  ))}
-                </tbody>
+                <thead className="sticky top-0 bg-slate-50"><tr>{["Nome","Unidade","Estoque","Preço","Categoria"].map(h=><th key={h} className="text-left px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
+                <tbody>{importRows.map((r,i)=><tr key={i} className={db.insumos.find(x=>x.name.toLowerCase()===r.name.toLowerCase())?"bg-amber-50":"bg-emerald-50"}><td className="px-3 py-2 font-medium">{r.name}</td><td className="px-3 py-2">{r.unit}</td><td className="px-3 py-2">{r.stockQty}</td><td className="px-3 py-2">{fmtCur(r.price)}</td><td className="px-3 py-2 text-slate-500">{r.categoryName||"—"}</td></tr>)}</tbody>
               </table>
             </div>
             <div className="flex justify-end gap-2 pt-2"><Btn variant="secondary" onClick={()=>setImportModal(false)}>Cancelar</Btn><Btn onClick={confirmImport} disabled={importing}>{importing&&<Loader2 size={14} className="animate-spin"/>} Confirmar importação</Btn></div>
           </div>
         </Modal>
       )}
-
       {del&&<Modal title="Excluir insumo" onClose={()=>setDel(null)}><p className="text-slate-600 mb-5">Excluir <strong>{del.name}</strong>?</p><div className="flex justify-end gap-2"><Btn variant="secondary" onClick={()=>setDel(null)}>Cancelar</Btn><Btn variant="danger" disabled={busy} onClick={async()=>{setBusy(true);await saveKey("insumos",db.insumos.filter(i=>i.id!==del.id));setDel(null);setBusy(false)}}>Excluir</Btn></div></Modal>}
     </PageWrap>
   )
@@ -771,35 +1007,37 @@ function MinhasReqsPage({db,user}){
 }
 
 // ─── Aprovações ───────────────────────────────────────────────────────────────
-function AprovacoesPage({db,saveKey,user,settings}){
+function AprovacoesPage({db,saveKey,user}){
   const [filter,setFilter]=useState("pending"); const [detail,setDetail]=useState(null); const [noteText,setNoteText]=useState(""); const [busy,setBusy]=useState(false)
-  const [deliveries,setDeliveries]=useState([]); const [loadingDel,setLoadingDel]=useState(false); const [delivModal,setDelivModal]=useState(false)
-  const [delivForm,setDelivForm]=useState({deliveredAt:today(),notes:"",items:[]})
+  const [itemStatuses,setItemStatuses]=useState({})
   const filtered=db.requisitions.filter(r=>filter==="all"?true:r.status===filter).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
   const getU=id=>db.users.find(u=>u.id===id); const getT=id=>db.turmas.find(t=>t.id===id)
-
-  const openDetail=async r=>{ setDetail(r); setNoteText(r.managerNote||""); if(r.status==="approved"){ setLoadingDel(true); const d=await getDeliveries(r.id); setDeliveries(d); setLoadingDel(false) } else setDeliveries([]) }
-  const approve=async req=>{ setBusy(true); const insumos=db.insumos.map(i=>{const item=req.items?.find(x=>x.insumoId===i.id);return item?{...i,stockQty:Math.max(0,i.stockQty-item.qty)}:i}); await saveKey("insumos",insumos); await saveKey("requisitions",db.requisitions.map(r=>r.id===req.id?{...r,status:"approved",managerNote:noteText,approvedBy:user.id,approvedAt:ts()}:r))
-    const notif={id:uid(),reqId:req.id,message:`Requisição de ${getU(req.userId)?.name} foi APROVADA por ${user.name}`,read:false,createdAt:ts()}
-    await saveKey("notifications",[...db.notifications,notif])
-    const reqUser=getU(req.userId); await emailUser(reqUser,settings,req,true,noteText,user.name)
-    setDetail(null); setNoteText(""); setBusy(false) }
-  const reject=async req=>{ setBusy(true); await saveKey("requisitions",db.requisitions.map(r=>r.id===req.id?{...r,status:"rejected",managerNote:noteText,rejectedBy:user.id,rejectedAt:ts()}:r))
-    const notif={id:uid(),reqId:req.id,message:`Requisição de ${getU(req.userId)?.name} foi REJEITADA por ${user.name}`,read:false,createdAt:ts()}
-    await saveKey("notifications",[...db.notifications,notif])
-    const reqUser=getU(req.userId); await emailUser(reqUser,settings,req,false,noteText,user.name)
-    setDetail(null); setNoteText(""); setBusy(false) }
-
-  const openDelivModal=()=>{ setDelivForm({deliveredAt:today(),notes:"",items:detail.items?.map(i=>({...i,delivQty:i.qty}))||[]}); setDelivModal(true) }
-  const saveDelivery=async()=>{ setBusy(true); const d={id:uid(),requisitionId:detail.id,items:delivForm.items.map(i=>({insumoId:i.insumoId,name:i.name,unit:i.unit,qty:i.delivQty})),deliveredAt:delivForm.deliveredAt,notes:delivForm.notes,createdBy:user.id,createdAt:ts()}; await addDelivery(d); const updated=await getDeliveries(detail.id); setDeliveries(updated); setDelivModal(false); setBusy(false) }
   const getManagerName=id=>db.users.find(u=>u.id===id)?.name||"Gerente"
-
+  const openDetail=r=>{ setDetail(r); setNoteText(r.managerNote||""); const st={}; (r.items||[]).forEach((item,i)=>{st[i]=item.itemStatus||"pending"}); setItemStatuses(st) }
+  const setItemSt=(idx,st)=>setItemStatuses(prev=>({...prev,[idx]:st}))
+  const allRejected=Object.values(itemStatuses).every(s=>s==="rejected")
+  const allApproved=Object.values(itemStatuses).every(s=>s==="approved")
+  const someApproved=Object.values(itemStatuses).some(s=>s==="approved")
+  const processReq=async req=>{ setBusy(true)
+    const updatedItems=(req.items||[]).map((item,i)=>({...item,itemStatus:itemStatuses[i]||"pending"}))
+    const approvedItems=updatedItems.filter(i=>i.itemStatus==="approved")
+    const approvedTotal=approvedItems.reduce((s,i)=>s+i.qty*(i.unitPrice||0),0)
+    const newStatus=allRejected?"rejected":allApproved?"approved":"partial"
+    const insumos=db.insumos.map(ins=>{const item=approvedItems.find(x=>x.insumoId===ins.id);return item?{...ins,stockQty:Math.max(0,ins.stockQty-item.qty)}:ins})
+    await saveKey("insumos",insumos)
+    await saveKey("requisitions",db.requisitions.map(r=>r.id===req.id?{...r,items:updatedItems,status:newStatus,managerNote:noteText,approvedBy:user.id,approvedAt:ts(),approvedTotal}:r))
+    const notif={id:uid(),reqId:req.id,message:`Requisição de ${getU(req.userId)?.name} foi ${newStatus==="approved"?"APROVADA":newStatus==="rejected"?"REJEITADA":"APROVADA PARCIALMENTE"} por ${user.name}`,read:false,createdAt:ts()}
+    await saveKey("notifications",[...db.notifications,notif])
+    setDetail(null); setNoteText(""); setBusy(false)
+  }
   return(
     <PageWrap>
-      <PageHeader title="Aprovações" sub="Analise as requisições de material"/>
+      <PageHeader title="Aprovações" sub="Analise e aprove por item"/>
       <div className="flex gap-2 mb-6 flex-wrap">
-        {[{k:"pending",l:"Pendentes"},{k:"approved",l:"Aprovados"},{k:"rejected",l:"Rejeitados"},{k:"all",l:"Todos"}].map(f=>(
-          <button key={f.k} onClick={()=>setFilter(f.k)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${filter===f.k?"bg-blue-600 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{f.l} {f.k!=="all"&&<span className="ml-1 text-xs opacity-70">{db.requisitions.filter(r=>r.status===f.k).length}</span>}</button>
+        {[{k:"pending",l:"Pendentes"},{k:"approved",l:"Aprovados"},{k:"partial",l:"Parciais"},{k:"rejected",l:"Rejeitados"},{k:"all",l:"Todos"}].map(f=>(
+          <button key={f.k} onClick={()=>setFilter(f.k)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition ${filter===f.k?"bg-blue-600 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"}`}>
+            {f.l} <span className="ml-1 text-xs opacity-70">{db.requisitions.filter(r=>r.status===f.k).length}</span>
+          </button>
         ))}
       </div>
       <Card>{filtered.length===0?<EmptyState icon={ClipboardList} title="Nenhuma requisição" sub="Nenhuma neste filtro"/>:
@@ -807,91 +1045,68 @@ function AprovacoesPage({db,saveKey,user,settings}){
           <div key={r.id} className="px-5 py-4 hover:bg-slate-50 cursor-pointer" onClick={()=>openDetail(r)}>
             <div className="flex items-start gap-4">
               <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm flex-shrink-0">{u?.name[0]||"?"}</div>
-              <div className="flex-1 min-w-0"><p className="text-sm font-semibold text-slate-800">{u?.name}</p><p className="text-xs text-slate-500">{t?.name} · {fmtDate(r.createdAt)}</p><p className="text-xs text-slate-400 mt-0.5">{r.items?.map(i=>`${i.qty}× ${i.name}`).join(", ")}</p>
-                {(r.approvedBy||r.rejectedBy)&&<p className="text-xs text-slate-400 mt-0.5">{r.approvedBy?"Aprovado":"Rejeitado"} por: {getManagerName(r.approvedBy||r.rejectedBy)}</p>}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-800">{u?.name}</p>
+                <p className="text-xs text-slate-500">{t?.name} · {fmtDate(r.createdAt)}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{r.items?.map(i=>i.name).join(", ")}</p>
+                {r.approvedBy&&<p className="text-xs text-slate-400 mt-0.5">Processado por: {getManagerName(r.approvedBy)}</p>}
               </div>
-              <div className="text-right flex-shrink-0"><p className="text-sm font-bold text-slate-800">{fmtCur(r.total)}</p><Badge color={sc?.color}>{sc?.label}</Badge></div>
+              <div className="text-right flex-shrink-0"><p className="text-sm font-bold text-slate-800">{fmtCur(r.approvedTotal??r.total)}</p><Badge color={sc?.color}>{sc?.label}</Badge></div>
             </div>
           </div>
         )})}
       </div>}
       </Card>
-
       {detail&&(
-        <Modal title="Analisar Requisição" onClose={()=>setDetail(null)} wide>
+        <Modal title="Analisar Requisição — por item" onClose={()=>setDetail(null)} wide>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div><span className="text-slate-400">Solicitante: </span><strong>{getU(detail.userId)?.name}</strong></div>
               <div><span className="text-slate-400">Turma: </span><strong>{getT(detail.turmaId)?.name}</strong></div>
               <div><span className="text-slate-400">Data: </span><strong>{fmtDate(detail.createdAt)}</strong></div>
               <div className="flex items-center gap-2"><span className="text-slate-400">Status: </span><Badge color={statusCfg[detail.status]?.color}>{statusCfg[detail.status]?.label}</Badge></div>
-              {detail.approvedBy&&<div className="col-span-2 p-2 bg-emerald-50 rounded-lg text-emerald-800 text-xs"><strong>Aprovado por:</strong> {getManagerName(detail.approvedBy)} em {fmtDate(detail.approvedAt)}</div>}
-              {detail.rejectedBy&&<div className="col-span-2 p-2 bg-red-50 rounded-lg text-red-800 text-xs"><strong>Rejeitado por:</strong> {getManagerName(detail.rejectedBy)} em {fmtDate(detail.rejectedAt)}</div>}
+              {detail.approvedBy&&<div className="col-span-2 p-2 bg-emerald-50 rounded-lg text-emerald-800 text-xs"><strong>Processado por:</strong> {getManagerName(detail.approvedBy)} em {fmtDate(detail.approvedAt)}</div>}
             </div>
             <hr className="border-slate-100"/>
-            <table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-400"><th className="py-1">Item</th><th>Qtde</th><th>Unit.</th><th className="text-right">Total</th></tr></thead>
-              <tbody className="divide-y divide-slate-50">{detail.items?.map((i,idx)=><tr key={idx}><td className="py-2">{i.name}</td><td>{i.qty} {i.unit}</td><td>{fmtCur(i.unitPrice||0)}</td><td className="text-right font-semibold">{fmtCur(i.qty*(i.unitPrice||0))}</td></tr>)}</tbody>
-            </table>
-            <div className="flex justify-between font-bold text-sm border-t border-slate-100 pt-2"><span>Total</span><span>{fmtCur(detail.total)}</span></div>
-            {detail.notes&&<p className="text-sm bg-slate-50 p-3 rounded-xl text-slate-600"><strong>Observação:</strong> {detail.notes}</p>}
-
-            {detail.status==="approved"&&(
-              <div>
-                <div className="flex items-center justify-between mt-2 mb-2">
-                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Entregas Registradas</p>
-                  <Btn size="sm" variant="success" onClick={openDelivModal}><Truck size={12}/> Registrar entrega</Btn>
-                </div>
-                {loadingDel?<div className="flex justify-center py-4"><Loader2 size={16} className="animate-spin text-slate-400"/></div>:
-                  deliveries.length===0?<p className="text-sm text-slate-400 italic">Nenhuma entrega ainda.</p>:
-                  <div className="space-y-2">{deliveries.map(d=>(
-                    <div key={d.id} className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-sm">
-                      <div className="flex items-center gap-2 mb-1"><Truck size={14} className="text-emerald-600"/><strong className="text-emerald-800">{fmtDate(d.deliveredAt)}</strong></div>
-                      <p className="text-xs text-emerald-700">{d.items?.map(i=>`${i.qty}x ${i.name}`).join(", ")}</p>
-                      {d.notes&&<p className="text-xs text-emerald-600 mt-1 italic">{d.notes}</p>}
-                      <p className="text-xs text-emerald-500 mt-1">Registrado por: {getManagerName(d.createdBy)}</p>
-                    </div>
-                  ))}</div>
-                }
-              </div>
-            )}
-
-            {detail.status==="pending"&&(
-              <>
-                <Field label="Nota do gerente (opcional)"><Inp value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Justificativa de aprovação ou rejeição..."/></Field>
-                <div className="flex justify-end gap-2 pt-2">
-                  <Btn variant="secondary" onClick={()=>setDetail(null)}>Cancelar</Btn>
-                  <Btn variant="danger" disabled={busy} onClick={()=>reject(detail)}>{busy?<Loader2 size={14} className="animate-spin"/>:<X size={14}/>} Rejeitar</Btn>
-                  <Btn variant="success" disabled={busy} onClick={()=>approve(detail)}>{busy?<Loader2 size={14} className="animate-spin"/>:<Check size={14}/>} Aprovar</Btn>
-                </div>
-              </>
-            )}
-            {detail.status!=="pending"&&<div className="flex justify-end"><Btn variant="secondary" onClick={()=>setDetail(null)}>Fechar</Btn></div>}
-          </div>
-        </Modal>
-      )}
-
-      {delivModal&&detail&&(
-        <Modal title="Registrar Entrega" onClose={()=>setDelivModal(false)}>
-          <div className="space-y-4">
-            <Field label="Data da entrega" required><Inp type="date" value={delivForm.deliveredAt} onChange={e=>setDelivForm(f=>({...f,deliveredAt:e.target.value}))}/></Field>
-            <Field label="Itens entregues">
-              <div className="space-y-2">
-                {delivForm.items.map((item,idx)=>(
-                  <div key={idx} className="flex items-center gap-3 bg-slate-50 px-3 py-2 rounded-lg">
-                    <span className="flex-1 text-sm">{item.name}</span>
-                    <span className="text-xs text-slate-400">{item.unit}</span>
-                    <div className="flex items-center gap-1">
-                      <button onClick={()=>setDelivForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,delivQty:Math.max(0,x.delivQty-1)}:x)}))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 flex items-center justify-center text-xs font-bold">−</button>
-                      <span className="w-8 text-center text-sm font-semibold">{item.delivQty}</span>
-                      <button onClick={()=>setDelivForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,delivQty:Math.min(x.qty,x.delivQty+1)}:x)}))} className="w-6 h-6 rounded bg-slate-200 hover:bg-slate-300 flex items-center justify-center text-xs font-bold">+</button>
-                      <span className="text-xs text-slate-400">/ {item.qty}</span>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Aprovar / Rejeitar por item:</p>
+            <div className="space-y-2">
+              {detail.items?.map((item,idx)=>{
+                const st=itemStatuses[idx]||"pending"
+                return(
+                  <div key={idx} className={`rounded-xl border px-4 py-3 transition-all ${st==="approved"?"border-emerald-300 bg-emerald-50":st==="rejected"?"border-red-300 bg-red-50":"border-slate-200 bg-slate-50"}`}>
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800">{item.name}</p>
+                        <p className="text-xs text-slate-500">{item.qty} {item.unit} · {fmtCur(item.qty*(item.unitPrice||0))}</p>
+                      </div>
+                      {detail.status==="pending"?(
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button onClick={()=>setItemSt(idx,"approved")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${st==="approved"?"bg-emerald-600 text-white":"bg-white border border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-700"}`}><Check size={12}/> Aprovar</button>
+                          <button onClick={()=>setItemSt(idx,"rejected")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${st==="rejected"?"bg-red-600 text-white":"bg-white border border-slate-200 text-slate-600 hover:border-red-400 hover:text-red-700"}`}><X size={12}/> Rejeitar</button>
+                        </div>
+                      ):(
+                        <Badge color={st==="approved"?"green":st==="rejected"?"red":"yellow"}>{st==="approved"?"Aprovado":st==="rejected"?"Rejeitado":"Pendente"}</Badge>
+                      )}
                     </div>
                   </div>
-                ))}
+                )
+              })}
+            </div>
+            {detail.status==="pending"&&(
+              <div className="flex gap-2 text-xs">
+                <button onClick={()=>detail.items?.forEach((_,i)=>setItemSt(i,"approved"))} className="px-3 py-1 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition">Aprovar todos</button>
+                <button onClick={()=>detail.items?.forEach((_,i)=>setItemSt(i,"rejected"))} className="px-3 py-1 rounded-lg border border-red-200 text-red-700 hover:bg-red-50 transition">Rejeitar todos</button>
               </div>
-            </Field>
-            <Field label="Observações"><textarea value={delivForm.notes} onChange={e=>setDelivForm(f=>({...f,notes:e.target.value}))} rows={2} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Ex: Item X chegou fora do prazo, aguardando complemento..."/></Field>
-            <div className="flex justify-end gap-2"><Btn variant="secondary" onClick={()=>setDelivModal(false)}>Cancelar</Btn><Btn variant="success" disabled={busy} onClick={saveDelivery}>{busy&&<Loader2 size={14} className="animate-spin"/>}<Truck size={14}/> Registrar</Btn></div>
+            )}
+            {detail.notes&&<p className="text-sm bg-slate-50 p-3 rounded-xl text-slate-600"><strong>Obs do professor:</strong> {detail.notes}</p>}
+            <Field label="Nota do gerente (opcional)"><Inp value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Justificativa ou observação..."/></Field>
+            {someApproved&&<div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-800">Total aprovado: <strong>{fmtCur(detail.items?.filter((_,i)=>itemStatuses[i]==="approved").reduce((s,item)=>s+item.qty*(item.unitPrice||0),0)||0)}</strong></div>}
+            {detail.status==="pending"?(
+              <div className="flex justify-end gap-2 pt-2">
+                <Btn variant="secondary" onClick={()=>setDetail(null)}>Cancelar</Btn>
+                <Btn variant="success" disabled={busy||(!someApproved&&!allRejected)} onClick={()=>processReq(detail)}>{busy&&<Loader2 size={14} className="animate-spin"/>}<Check size={14}/> Confirmar decisão</Btn>
+              </div>
+            ):<div className="flex justify-end"><Btn variant="secondary" onClick={()=>setDetail(null)}>Fechar</Btn></div>}
           </div>
         </Modal>
       )}
@@ -899,26 +1114,41 @@ function AprovacoesPage({db,saveKey,user,settings}){
   )
 }
 
-// ─── Notificações ─────────────────────────────────────────────────────────────
 function NotificacoesPage({db,saveKey,setPage}){
   const notifs=[...db.notifications].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const [selected,setSelected]=useState(new Set())
+  const toggleSel=id=>{ if(db.notifications.find(n=>n.id===id)?.read) return; setSelected(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n}) }
+  const markSelected=async()=>{ if(!selected.size) return; await saveKey("notifications",db.notifications.map(n=>selected.has(n.id)?{...n,read:true}:n)); setSelected(new Set()) }
+  const markAll=async()=>await saveKey("notifications",db.notifications.map(n=>({...n,read:true})))
+  const unread=db.notifications.filter(n=>!n.read).length
   return(
     <PageWrap>
-      <PageHeader title="Notificações" sub={`${db.notifications.filter(n=>!n.read).length} não lida(s)`} action={<Btn variant="secondary" onClick={()=>saveKey("notifications",db.notifications.map(n=>({...n,read:true})))}>Marcar todas como lidas</Btn>}/>
+      <PageHeader title="Notificações" sub={`${unread} não lida(s)`} action={
+        <div className="flex gap-2">
+          {selected.size>0&&<Btn size="sm" variant="secondary" onClick={markSelected}><Check size={14}/> Marcar {selected.size} como lida(s)</Btn>}
+          <Btn variant="secondary" size="sm" onClick={markAll}>Marcar todas como lidas</Btn>
+        </div>
+      }/>
       <Card>{notifs.length===0?<EmptyState icon={Bell} title="Nenhuma notificação"/>:
         <div className="divide-y divide-slate-50">{notifs.map(n=>(
-          <div key={n.id} className={`px-5 py-4 flex items-start gap-4 ${!n.read?"bg-blue-50/50":""}`}>
-            <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${!n.read?"bg-blue-500":"bg-slate-200"}`}/>
-            <div className="flex-1"><p className="text-sm text-slate-800">{n.message}</p><p className="text-xs text-slate-400 mt-1">{fmtDate(n.createdAt)}</p></div>
-            <Btn size="sm" variant="ghost" onClick={()=>setPage("aprovacoes")}><ChevronRight size={14}/> Ver</Btn>
+          <div key={n.id} className={`px-5 py-4 flex items-start gap-4 transition cursor-pointer ${!n.read?"bg-blue-50/50":""} ${selected.has(n.id)?"ring-1 ring-inset ring-blue-400":""}`} onClick={()=>toggleSel(n.id)}>
+            <div className="mt-0.5 flex-shrink-0">
+              {n.read?<CheckSquare size={16} className="text-slate-200"/>:selected.has(n.id)?<CheckSquare size={16} className="text-blue-600"/>:<Square size={16} className="text-blue-400"/>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm ${!n.read?"text-slate-800 font-medium":"text-slate-500"}`}>{n.message}</p>
+              <p className="text-xs text-slate-400 mt-1">{fmtDate(n.createdAt)}</p>
+            </div>
+            {!n.read&&<div className="w-2 h-2 rounded-full bg-blue-500 flex-shrink-0 mt-2"/>}
+            <Btn size="sm" variant="ghost" onClick={e=>{e.stopPropagation();setPage("aprovacoes")}}><ChevronRight size={14}/></Btn>
           </div>
-        ))}</div>}
+        ))}</div>
+      }
       </Card>
     </PageWrap>
   )
 }
 
-// ─── Relatórios ───────────────────────────────────────────────────────────────
 function RelatoriosPage({db}){
   const [selMonth,setSelMonth]=useState(MONTH)
   const data=sortAlpha(db.turmas,"name","asc").map(t=>{
@@ -967,17 +1197,35 @@ export default function App(){
   const [user,setUser]=useState(null); const [page,setPage]=useState("dashboard")
   const [db,setDb]=useState(null); const [loading,setLoading]=useState(true); const [dbError,setDbError]=useState(null)
   const [settings,setSettings]=useState({}); const [notifCount,setNotifCount]=useState(0)
+  const [pendingDeliveries,setPendingDeliveries]=useState([])
 
-  // Expose login for LoginScreen
-  window.__loginUser = u => { setUser(u); setPage("dashboard") }
+  window.__loginUser=u=>{ setUser(u); setPage("dashboard") }
+
+  const computePending=(requisitions,deliveries)=>{
+    const pending=[]
+    for(const req of requisitions.filter(r=>r.status==="approved"||r.status==="partial")){
+      const reqDelivs=deliveries.filter(d=>d.requisitionId===req.id)
+      const delivMap={}; for(const d of reqDelivs) for(const di of (d.items||[])) delivMap[di.insumoId]=(delivMap[di.insumoId]||0)+di.qty
+      for(const item of (req.items||[])){
+        if(item.itemStatus==="rejected") continue
+        const delivered=delivMap[item.insumoId]||0
+        if(delivered<item.qty) pending.push({reqId:req.id,turmaId:req.turmaId,insumoId:item.insumoId,itemName:item.name,unit:item.unit,qty:item.qty-delivered,createdAt:req.createdAt})
+      }
+    }
+    return pending
+  }
 
   const reload=async()=>{
-    const [users,turmas,insumos,budgets,requisitions,notifications,cfg]=await Promise.all([
+    const [users,turmas,insumos,budgets,requisitions,notifications,cfg,categories,deliveries]=await Promise.all([
       fetchAll("users"),fetchAll("turmas"),fetchAll("insumos"),fetchAll("budgets"),
-      fetchAll("requisitions","created_at"),fetchAll("notifications","created_at"),fetchSettings()
+      fetchAll("requisitions","created_at"),fetchAll("notifications","created_at"),
+      fetchSettings(),
+      fetchAll("insumo_categories"),
+      getAllDeliveries(),
     ])
-    setDb({users,turmas,insumos,budgets,requisitions,notifications})
+    setDb({users,turmas,insumos,budgets,requisitions,notifications,categories,deliveries})
     setSettings(cfg); setNotifCount(notifications.filter(n=>!n.read).length)
+    setPendingDeliveries(computePending(requisitions,deliveries))
   }
   const reloadSettings=async()=>{ const cfg=await fetchSettings(); setSettings(cfg) }
 
@@ -989,7 +1237,7 @@ export default function App(){
   const saveSett=async(k,v)=>{ await saveSetting(k,v); await reloadSettings() }
 
   if(loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="text-center"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"/><p className="text-slate-500 text-sm">Conectando...</p></div></div>
-  if(dbError) return <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6"><div className="max-w-md text-center"><AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/><h2 className="text-xl font-bold text-slate-800 mb-2">Erro de conexão</h2><p className="text-slate-500 text-sm mb-4">Verifique as variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY</p><pre className="text-xs bg-red-50 text-red-700 p-3 rounded-xl text-left overflow-auto">{dbError}</pre></div></div>
+  if(dbError) return <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6"><div className="max-w-md text-center"><AlertTriangle size={32} className="text-red-500 mx-auto mb-4"/><h2 className="text-xl font-bold text-slate-800 mb-2">Erro de conexão</h2><p className="text-slate-500 text-sm mb-4">Verifique VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no Vercel</p><pre className="text-xs bg-red-50 text-red-700 p-3 rounded-xl text-left overflow-auto">{dbError}</pre></div></div>
   if(!user||!db) return <LoginScreen users={db?.users||[]} settings={settings}/>
 
   const isManager=user.role==="manager"; const myTurma=db.turmas.find(t=>t.id===user.turmaId)
@@ -999,27 +1247,29 @@ export default function App(){
   const navItems=[
     {id:"dashboard",label:"Dashboard",icon:Home},
     ...(isManager?[
-      {id:"usuarios",label:"Usuários",icon:Users},
-      {id:"turmas",label:"Turmas",icon:BookOpen},
-      {id:"insumos",label:"Insumos / Estoque",icon:Package},
-      {id:"orcamentos",label:"Orçamentos",icon:DollarSign},
-      {id:"aprovacoes",label:"Aprovações",icon:ClipboardList},
-      {id:"relatorios",label:"Relatórios",icon:BarChart2},
-      {id:"notificacoes",label:"Notificações",icon:Bell,badge:notifCount},
-      {id:"configuracoes",label:"Configurações",icon:Settings},
+      {id:"usuarios",     label:"Usuários",           icon:Users},
+      {id:"turmas",       label:"Turmas",              icon:BookOpen},
+      {id:"insumos",      label:"Insumos / Estoque",   icon:Package},
+      {id:"orcamentos",   label:"Orçamentos",          icon:DollarSign},
+      {id:"aprovacoes",   label:"Aprovações",          icon:ClipboardList, badge:db.requisitions.filter(r=>r.status==="pending").length},
+      {id:"entregas",     label:"Registro de Entregas",icon:Truck,         badge:pendingDeliveries.length},
+      {id:"relatorios",   label:"Relatórios",          icon:BarChart2},
+      {id:"notificacoes", label:"Notificações",        icon:Bell,          badge:notifCount},
+      {id:"configuracoes",label:"Configurações",       icon:Settings},
     ]:[
-      {id:"requisicao",label:"Nova Requisição",icon:Plus},
-      {id:"minhasreqs",label:"Minhas Requisições",icon:ClipboardList},
+      {id:"requisicao",   label:"Nova Requisição",     icon:Plus},
+      {id:"minhasreqs",   label:"Minhas Requisições",  icon:ClipboardList},
     ]),
   ]
 
   const pageMap={
-    dashboard:    <Dashboard {...props} notifCount={notifCount}/>,
+    dashboard:    <Dashboard {...props} notifCount={notifCount} pendingDeliveries={pendingDeliveries}/>,
     usuarios:     <UsuariosPage {...props}/>,
     turmas:       <TurmasPage {...props}/>,
     insumos:      <InsumosPage {...props}/>,
     orcamentos:   <OrcamentosPage {...props}/>,
-    aprovacoes:   <AprovacoesPage {...props}/>,
+    aprovacoes:   <AprovacoesPage db={db} saveKey={saveKey} user={user} setPage={setPage}/>,
+    entregas:     <EntregasPage db={db} user={user} setPage={setPage} pendingDeliveries={pendingDeliveries} reload={reload}/>,
     relatorios:   <RelatoriosPage {...props}/>,
     notificacoes: <NotificacoesPage {...props} setPage={setPage}/>,
     configuracoes:<ConfiguracoesPage {...props} saveKey={saveKey} reloadSettings={reloadSettings} saveSetting={saveSett}/>,
