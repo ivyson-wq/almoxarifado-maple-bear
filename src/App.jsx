@@ -761,7 +761,7 @@ function InsumosPage({db,saveKey}){
   const saveCat=async()=>{ setBusy(true); const c=[...(db.categories||[])]; if(catEdit){const i=c.findIndex(x=>x.id===catEdit.id);c[i]={...c[i],name:catForm.name}}else c.push({id:uid(),name:catForm.name}); await saveKey("categories",c); setCatEdit(null); setCatForm({name:""}); setBusy(false) }
   const delCat=async id=>saveKey("categories",(db.categories||[]).filter(c=>c.id!==id))
   const getCatName=id=>cats.find(c=>c.id===id)?.name||""
-  const stockColor=qty=>qty<=0?"red":qty<=5?"yellow":"green"
+  const stockColor=qty=>qty<0?"red":qty===0?"red":qty<=5?"yellow":"green"
   return(
     <PageWrap>
       <PageHeader title="Insumos / Estoque" sub={`${db.insumos.length} item(s)`} action={
@@ -906,46 +906,183 @@ function OrcamentosPage({db,saveKey}){
 
 // ─── Nova Requisição ──────────────────────────────────────────────────────────
 function RequisicaoPage({db,saveKey,user,settings}){
-  const [items,setItems]=useState([]); const [notes,setNotes]=useState(""); const [submitted,setSubmitted]=useState(false); const [err,setErr]=useState(""); const [busy,setBusy]=useState(false)
+  const [items,setItems]=useState([])
+  const [notes,setNotes]=useState("")
+  const [extraItems,setExtraItems]=useState("")
+  const [submitted,setSubmitted]=useState(false)
+  const [err,setErr]=useState("")
+  const [busy,setBusy]=useState(false)
+  const [catalogSearch,setCatalogSearch]=useState("")
+
   const myTurma=db.turmas.find(t=>t.id===user.turmaId)
   const budget=myTurma?db.budgets.find(b=>b.turmaId===myTurma.id&&b.month===MONTH):null
   const spent=myTurma?db.requisitions.filter(r=>r.turmaId===myTurma.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+r.total,0):0
-  const available=(budget?.amount||0)-spent; const total=items.reduce((s,i)=>s+i.qty*i.price,0)
+  const available=(budget?.amount||0)-spent
+  const total=items.reduce((s,i)=>s+i.qty*i.price,0)
+
   const addItem=ins=>{if(items.find(i=>i.insumoId===ins.id))return;setItems([...items,{insumoId:ins.id,name:ins.name,unit:ins.unit,stockQty:ins.stockQty,price:ins.price,qty:1}])}
-  const updQty=(id,qty)=>setItems(items.map(i=>i.insumoId===id?{...i,qty:Math.max(1,Math.min(i.stockQty,qty))}:i))
+  const updQty=(id,qty)=>setItems(items.map(i=>i.insumoId===id?{...i,qty:Math.max(1,qty)}:i))
   const remItem=id=>setItems(items.filter(i=>i.insumoId!==id))
+
+  // Real-time filtering as user types — no button needed
+  const filteredInsumos=sortAlpha(
+    db.insumos.filter(i=>!catalogSearch||i.name.toLowerCase().includes(catalogSearch.toLowerCase())||i.description?.toLowerCase().includes(catalogSearch.toLowerCase())),
+    "name","asc"
+  )
+
   const submit=async()=>{
-    setErr(""); if(!myTurma) return setErr("Você não está vinculado a nenhuma turma."); if(items.length===0) return setErr("Adicione pelo menos um item."); if(budget&&total>available) return setErr(`Total excede o saldo disponível (${fmtCur(available)}).`); setBusy(true)
-    const req={id:uid(),userId:user.id,turmaId:myTurma.id,month:MONTH,items:items.map(i=>({insumoId:i.insumoId,name:i.name,qty:i.qty,unit:i.unit,unitPrice:i.price})),total,notes,status:"pending",createdAt:ts()}
-    const notif={id:uid(),reqId:req.id,message:`${user.name} (${myTurma.name}) solicitou ${items.length} item(s) — Total: ${fmtCur(total)}`,read:false,createdAt:ts()}
+    setErr("")
+    if(!myTurma) return setErr("Você não está vinculado a nenhuma turma.")
+    if(items.length===0 && !extraItems.trim()) return setErr("Adicione ao menos um item do catálogo ou descreva itens extras.")
+    if(budget&&total>available) return setErr(`Total excede o saldo disponível (${fmtCur(available)}).`)
+    setBusy(true)
+    const req={id:uid(),userId:user.id,turmaId:myTurma.id,month:MONTH,
+      items:items.map(i=>({insumoId:i.insumoId,name:i.name,qty:i.qty,unit:i.unit,unitPrice:i.price,itemStatus:"pending"})),
+      extraItems:extraItems.trim()||null,
+      total,notes,status:"pending",createdAt:ts()}
+    const notif={id:uid(),reqId:req.id,
+      message:`${user.name} (${myTurma.name}) solicitou ${items.length} item(s)${extraItems?" + itens extras":""} — Total: ${fmtCur(total)}`,
+      read:false,createdAt:ts()}
     await saveKey("requisitions",[...db.requisitions,req])
     await saveKey("notifications",[...db.notifications,notif])
-    await emailManagers(db.users.filter(u=>u.role==="manager"),settings,req,user.name,myTurma.name)
+    // Fix 1: pass sender email so managers don't receive their own copy
+    await emailManagers(db.users.filter(u=>u.role==="manager"),settings,req,user.name,myTurma.name,user.email||"")
     setSubmitted(true); setBusy(false)
   }
+
   if(!myTurma) return <PageWrap><EmptyState icon={AlertTriangle} title="Turma não atribuída" sub="Solicite ao gerente que vincule você a uma turma."/></PageWrap>
-  if(submitted) return <PageWrap><div className="max-w-md mx-auto text-center py-16"><div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle size={40} className="text-emerald-600"/></div><h2 className="text-xl font-bold text-slate-800 mb-2">Requisição enviada!</h2><p className="text-slate-500 mb-6">O gerente foi notificado e analisará em breve.</p><Btn onClick={()=>{setItems([]);setNotes("");setSubmitted(false)}}><Plus size={16}/> Nova requisição</Btn></div></PageWrap>
-  const sortedInsumos=sortAlpha(db.insumos,"name","asc")
+  if(submitted) return (
+    <PageWrap>
+      <div className="max-w-md mx-auto text-center py-16">
+        <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle size={40} className="text-emerald-600"/></div>
+        <h2 className="text-xl font-bold text-slate-800 mb-2">Requisição enviada!</h2>
+        <p className="text-slate-500 mb-6">O gerente foi notificado e analisará em breve.</p>
+        <Btn onClick={()=>{setItems([]);setNotes("");setExtraItems("");setSubmitted(false)}}><Plus size={16}/> Nova requisição</Btn>
+      </div>
+    </PageWrap>
+  )
+
   return(
     <PageWrap>
       <PageHeader title="Nova Requisição" sub={`${myTurma.name} · ${monthLabel(MONTH)}`}/>
       <Card className="p-4 mb-6">
-        <div className="flex items-center justify-between mb-2"><span className="text-sm font-medium text-slate-700">Saldo disponível</span><span className={`text-sm font-bold ${available<0?"text-red-600":"text-emerald-600"}`}>{fmtCur(available)}</span></div>
-        <div className="h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500 rounded-full" style={{width:`${Math.max(0,Math.min(100,(available/(budget?.amount||1))*100))}%`}}/></div>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-700">Saldo disponível</span>
+          <span className={`text-sm font-bold ${available<0?"text-red-600":"text-emerald-600"}`}>{fmtCur(available)}</span>
+        </div>
+        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="h-full bg-emerald-500 rounded-full" style={{width:`${Math.max(0,Math.min(100,(available/(budget?.amount||1))*100))}%`}}/>
+        </div>
         <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Utilizado: {fmtCur(spent)}</span><span>Orçamento: {fmtCur(budget?.amount||0)}</span></div>
       </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Catálogo */}
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Catálogo de insumos</p>
-          <Card><div className="max-h-96 overflow-y-auto divide-y divide-slate-50">{sortedInsumos.length===0&&<EmptyState icon={Package} title="Nenhum insumo cadastrado"/>}{sortedInsumos.map(ins=>{const inCart=!!items.find(i=>i.insumoId===ins.id);const oos=ins.stockQty<=0;return(<div key={ins.id} className={`px-4 py-3 flex items-center justify-between ${oos?"opacity-50":""}`}><div className="flex-1 min-w-0"><p className="text-sm font-medium text-slate-800">{ins.name}</p><p className="text-xs text-slate-400">{fmtCur(ins.price)}/{ins.unit} · Estoque: {ins.stockQty}</p></div><Btn size="sm" variant={inCart?"secondary":"primary"} disabled={oos} onClick={()=>inCart?remItem(ins.id):addItem(ins)}>{inCart?<><Check size={12}/> Adicionado</>:<><Plus size={12}/> Adicionar</>}</Btn></div>)})}</div></Card>
+          <Card>
+            {/* Fix 4: real-time search */}
+            <div className="px-3 pt-3 pb-2 border-b border-slate-50">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                <input
+                  value={catalogSearch}
+                  onChange={e=>setCatalogSearch(e.target.value)}
+                  placeholder="Buscar material..."
+                  className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {catalogSearch&&<button onClick={()=>setCatalogSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={14}/></button>}
+              </div>
+            </div>
+            <div className="max-h-80 overflow-y-auto divide-y divide-slate-50">
+              {filteredInsumos.length===0&&<EmptyState icon={Package} title={catalogSearch?"Nenhum resultado":"Nenhum insumo cadastrado"}/>}
+              {filteredInsumos.map(ins=>{
+                const inCart=!!items.find(i=>i.insumoId===ins.id)
+                const outOfStock=ins.stockQty<=0
+                return(
+                  <div key={ins.id} className="px-4 py-3 flex items-center justify-between">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-slate-800">{ins.name}</p>
+                      <p className="text-xs text-slate-400">
+                        {fmtCur(ins.price)}/{ins.unit} ·{" "}
+                        <span className={outOfStock?"text-red-500 font-medium":""}> Estoque: {ins.stockQty}</span>
+                      </p>
+                    </div>
+                    <Btn size="sm" variant={inCart?"secondary":"primary"} onClick={()=>inCart?remItem(ins.id):addItem(ins)}>
+                      {inCart?<><Check size={12}/> Adicionado</>:<><Plus size={12}/> Adicionar</>}
+                    </Btn>
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
+
+          {/* Fix 3: field for unlisted items */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Itens não cadastrados</p>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-2">
+              <p className="text-xs text-amber-800">Precisa de algo que não está no catálogo ou está sem estoque? Descreva aqui — o gerente avaliará.</p>
+            </div>
+            <textarea
+              value={extraItems}
+              onChange={e=>setExtraItems(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
+              placeholder={"Ex: 3x Papel cartão amarelo A3\n1x Tinta guache azul 500ml\n..."}
+            />
+          </div>
         </div>
+
+        {/* Carrinho */}
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Itens selecionados</p>
-          <Card className="mb-4">{items.length===0?<EmptyState icon={ShoppingCart} title="Nenhum item" sub="Adicione do catálogo ao lado"/>:<div className="divide-y divide-slate-50">{items.map(i=>(<div key={i.insumoId} className="px-4 py-3"><div className="flex items-start justify-between gap-2"><div><p className="text-sm font-medium text-slate-800">{i.name}</p><p className="text-xs text-slate-400">{fmtCur(i.price)}/{i.unit}</p></div><button onClick={()=>remItem(i.insumoId)} className="text-slate-300 hover:text-red-500 transition p-1"><X size={14}/></button></div><div className="flex items-center justify-between mt-2"><div className="flex items-center gap-2"><button onClick={()=>updQty(i.insumoId,i.qty-1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700">−</button><span className="w-8 text-center text-sm font-semibold">{i.qty}</span><button onClick={()=>updQty(i.insumoId,i.qty+1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700">+</button><span className="text-xs text-slate-400">máx {i.stockQty}</span></div><span className="text-sm font-semibold text-slate-800">{fmtCur(i.qty*i.price)}</span></div></div>))}</div>}</Card>
-          <Field label="Observações"><textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Justificativa ou observação (opcional)..."/></Field>
+          <Card className="mb-4">
+            {items.length===0
+              ?<EmptyState icon={ShoppingCart} title="Nenhum item" sub="Adicione do catálogo ao lado"/>
+              :<div className="divide-y divide-slate-50">
+                {items.map(i=>(
+                  <div key={i.insumoId} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">{i.name}</p>
+                        <p className="text-xs text-slate-400">{fmtCur(i.price)}/{i.unit}{i.stockQty<=0&&<span className="ml-1 text-red-500">(sem estoque)</span>}</p>
+                      </div>
+                      <button onClick={()=>remItem(i.insumoId)} className="text-slate-300 hover:text-red-500 transition p-1"><X size={14}/></button>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="flex items-center gap-2">
+                        <button onClick={()=>updQty(i.insumoId,i.qty-1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700">−</button>
+                        <span className="w-8 text-center text-sm font-semibold">{i.qty}</span>
+                        <button onClick={()=>updQty(i.insumoId,i.qty+1)} className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-700">+</button>
+                      </div>
+                      <span className="text-sm font-semibold text-slate-800">{fmtCur(i.qty*i.price)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            }
+          </Card>
+
+          <Field label="Observações gerais">
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              placeholder="Justificativa ou observação (opcional)..."/>
+          </Field>
+
           {err&&<div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 flex gap-2"><AlertTriangle size={16} className="flex-shrink-0 mt-0.5"/>{err}</div>}
-          <div className="mt-4 p-4 bg-slate-50 rounded-xl"><div className="flex justify-between text-sm mb-1"><span className="text-slate-600">Total</span><span className={`font-bold ${budget&&total>available?"text-red-600":"text-slate-800"}`}>{fmtCur(total)}</span></div>{budget&&<div className="flex justify-between text-xs text-slate-400"><span>Saldo após aprovação</span><span className={available-total<0?"text-red-500":""}>{fmtCur(available-total)}</span></div>}</div>
-          <Btn className="w-full justify-center mt-4" onClick={submit} disabled={items.length===0||busy}>{busy?<Loader2 size={16} className="animate-spin"/>:<ClipboardList size={16}/>} Enviar Requisição</Btn>
+
+          <div className="mt-4 p-4 bg-slate-50 rounded-xl space-y-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-600">Total do catálogo</span>
+              <span className={`font-bold ${budget&&total>available?"text-red-600":"text-slate-800"}`}>{fmtCur(total)}</span>
+            </div>
+            {extraItems.trim()&&<div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2"><AlertTriangle size={12} className="flex-shrink-0 mt-0.5"/> Itens extras incluídos (sem valor definido — o gerente avaliará)</div>}
+            {budget&&<div className="flex justify-between text-xs text-slate-400"><span>Saldo após aprovação</span><span className={available-total<0?"text-red-500":""}>{fmtCur(available-total)}</span></div>}
+          </div>
+
+          <Btn className="w-full justify-center mt-4" onClick={submit} disabled={(items.length===0&&!extraItems.trim())||busy}>
+            {busy?<Loader2 size={16} className="animate-spin"/>:<ClipboardList size={16}/>} Enviar Requisição
+          </Btn>
         </div>
       </div>
     </PageWrap>
@@ -983,6 +1120,7 @@ function MinhasReqsPage({db,user}){
             {detail.items?.map((i,idx)=><div key={idx} className="flex justify-between text-sm bg-slate-50 px-3 py-2 rounded-lg"><span>{i.qty}x {i.name} ({i.unit})</span><span className="font-semibold">{fmtCur(i.qty*(i.unitPrice||0))}</span></div>)}
             <div className="flex justify-between font-bold text-sm border-t border-slate-100 pt-2"><span>Total</span><span>{fmtCur(detail.total)}</span></div>
             {detail.notes&&<p className="text-sm text-slate-600 bg-slate-50 p-3 rounded-xl"><strong>Obs:</strong> {detail.notes}</p>}
+            {detail.extraItems&&<div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><p className="font-semibold text-amber-800 mb-1">Itens fora do catálogo solicitados:</p><p className="text-amber-700 whitespace-pre-line">{detail.extraItems}</p></div>}
             {detail.managerNote&&<p className="text-sm text-amber-800 bg-amber-50 p-3 rounded-xl"><strong>Nota do gerente:</strong> {detail.managerNote}</p>}
             {detail.status==="approved"&&(
               <div>
@@ -1023,11 +1161,12 @@ function AprovacoesPage({db,saveKey,user}){
     const approvedItems=updatedItems.filter(i=>i.itemStatus==="approved")
     const approvedTotal=approvedItems.reduce((s,i)=>s+i.qty*(i.unitPrice||0),0)
     const newStatus=allRejected?"rejected":allApproved?"approved":"partial"
-    const insumos=db.insumos.map(ins=>{const item=approvedItems.find(x=>x.insumoId===ins.id);return item?{...ins,stockQty:Math.max(0,ins.stockQty-item.qty)}:ins})
+    const insumos=db.insumos.map(ins=>{const item=approvedItems.find(x=>x.insumoId===ins.id);return item?{...ins,stockQty:ins.stockQty-item.qty}:ins})
     await saveKey("insumos",insumos)
     await saveKey("requisitions",db.requisitions.map(r=>r.id===req.id?{...r,items:updatedItems,status:newStatus,managerNote:noteText,approvedBy:user.id,approvedAt:ts(),approvedTotal}:r))
-    const notif={id:uid(),reqId:req.id,message:`Requisição de ${getU(req.userId)?.name} foi ${newStatus==="approved"?"APROVADA":newStatus==="rejected"?"REJEITADA":"APROVADA PARCIALMENTE"} por ${user.name}`,read:false,createdAt:ts()}
-    await saveKey("notifications",[...db.notifications,notif])
+    const baseNotif={id:uid(),reqId:req.id,message:`Requisição de ${getU(req.userId)?.name} foi ${newStatus==="approved"?"APROVADA":newStatus==="rejected"?"REJEITADA":"APROVADA PARCIALMENTE"} por ${user.name}`,read:false,createdAt:ts()}
+    const negativeNotifs=insumos.filter(i=>i.stockQty<0).map(i=>({id:uid(),reqId:req.id,message:`⚠️ Estoque negativo: "${i.name}" ficou com ${i.stockQty} ${i.unit} após aprovação.`,read:false,createdAt:ts()}))
+    await saveKey("notifications",[...db.notifications,baseNotif,...negativeNotifs])
     setDetail(null); setNoteText(""); setBusy(false)
   }
   return(
@@ -1099,6 +1238,7 @@ function AprovacoesPage({db,saveKey,user}){
               </div>
             )}
             {detail.notes&&<p className="text-sm bg-slate-50 p-3 rounded-xl text-slate-600"><strong>Obs do professor:</strong> {detail.notes}</p>}
+            {detail.extraItems&&<div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm"><p className="font-semibold text-amber-800 mb-1">⚠️ Itens fora do catálogo (sem preço — avalie manualmente):</p><p className="text-amber-700 whitespace-pre-line">{detail.extraItems}</p></div>}
             <Field label="Nota do gerente (opcional)"><Inp value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Justificativa ou observação..."/></Field>
             {someApproved&&<div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-800">Total aprovado: <strong>{fmtCur(detail.items?.filter((_,i)=>itemStatuses[i]==="approved").reduce((s,item)=>s+item.qty*(item.unitPrice||0),0)||0)}</strong></div>}
             {detail.status==="pending"?(
