@@ -370,7 +370,7 @@ function Dashboard({db,user,setPage,notifCount,pendingDeliveries}){
       <Card>
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Requisições Recentes</h2>
-          <Btn variant="ghost" size="sm" onClick={()=>setPage(isManager?"aprovacoes":"minhasreqs")}>Ver todas <ChevronRight size={14}/></Btn>
+          <Btn variant="ghost" size="sm" onClick={()=>setPage("aprovacoes")}>Ver aprovações <ChevronRight size={14}/></Btn>
         </div>
         {recent.length===0?<EmptyState icon={ClipboardList} title="Nenhuma requisição ainda"/>:
           <div className="divide-y divide-slate-50">
@@ -384,6 +384,7 @@ function Dashboard({db,user,setPage,notifCount,pendingDeliveries}){
         }
       </Card>
       {!isManager&&<div className="mt-4"><Btn onClick={()=>setPage("requisicao")}><Plus size={16}/> Nova Requisição</Btn></div>}
+      {isManager&&<div className="mt-4"><Btn variant="secondary" onClick={()=>setPage("requisicao")}><Plus size={16}/> Fazer Requisição</Btn></div>}
       {isManager&&notifCount>0&&(
         <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3">
           <Bell size={18} className="text-amber-600 flex-shrink-0"/>
@@ -906,6 +907,7 @@ function OrcamentosPage({db,saveKey}){
 
 // ─── Nova Requisição ──────────────────────────────────────────────────────────
 function RequisicaoPage({db,saveKey,user,settings}){
+  const isManager = user.role === "manager"
   const [items,setItems]=useState([])
   const [notes,setNotes]=useState("")
   const [extraItems,setExtraItems]=useState("")
@@ -913,18 +915,20 @@ function RequisicaoPage({db,saveKey,user,settings}){
   const [err,setErr]=useState("")
   const [busy,setBusy]=useState(false)
   const [catalogSearch,setCatalogSearch]=useState("")
+  // Managers can pick any turma; regular users use their assigned turma
+  const [selectedTurmaId,setSelectedTurmaId]=useState(user.turmaId||"")
 
-  const myTurma=db.turmas.find(t=>t.id===user.turmaId)
-  const budget=myTurma?db.budgets.find(b=>b.turmaId===myTurma.id&&b.month===MONTH):null
-  const spent=myTurma?db.requisitions.filter(r=>r.turmaId===myTurma.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+r.total,0):0
-  const available=(budget?.amount||0)-spent
-  const total=items.reduce((s,i)=>s+i.qty*i.price,0)
+  const activeTurmaId = isManager ? selectedTurmaId : user.turmaId
+  const myTurma = db.turmas.find(t=>t.id===activeTurmaId)
+  const budget  = myTurma ? db.budgets.find(b=>b.turmaId===myTurma.id&&b.month===MONTH) : null
+  const spent   = myTurma ? db.requisitions.filter(r=>r.turmaId===myTurma.id&&r.month===MONTH&&r.status!=="rejected").reduce((s,r)=>s+r.total,0) : 0
+  const available = (budget?.amount||0)-spent
+  const total = items.reduce((s,i)=>s+i.qty*i.price,0)
 
   const addItem=ins=>{if(items.find(i=>i.insumoId===ins.id))return;setItems([...items,{insumoId:ins.id,name:ins.name,unit:ins.unit,stockQty:ins.stockQty,price:ins.price,qty:1}])}
   const updQty=(id,qty)=>setItems(items.map(i=>i.insumoId===id?{...i,qty:Math.max(1,qty)}:i))
   const remItem=id=>setItems(items.filter(i=>i.insumoId!==id))
 
-  // Real-time filtering as user types — no button needed
   const filteredInsumos=sortAlpha(
     db.insumos.filter(i=>!catalogSearch||i.name.toLowerCase().includes(catalogSearch.toLowerCase())||i.description?.toLowerCase().includes(catalogSearch.toLowerCase())),
     "name","asc"
@@ -932,7 +936,7 @@ function RequisicaoPage({db,saveKey,user,settings}){
 
   const submit=async()=>{
     setErr("")
-    if(!myTurma) return setErr("Você não está vinculado a nenhuma turma.")
+    if(!myTurma) return setErr(isManager?"Selecione uma turma antes de enviar.":"Você não está vinculado a nenhuma turma.")
     if(items.length===0 && !extraItems.trim()) return setErr("Adicione ao menos um item do catálogo ou descreva itens extras.")
     if(budget&&total>available) return setErr(`Total excede o saldo disponível (${fmtCur(available)}).`)
     setBusy(true)
@@ -945,52 +949,63 @@ function RequisicaoPage({db,saveKey,user,settings}){
       read:false,createdAt:ts()}
     await saveKey("requisitions",[...db.requisitions,req])
     await saveKey("notifications",[...db.notifications,notif])
-    // Fix 1: pass sender email so managers don't receive their own copy
     await emailManagers(db.users.filter(u=>u.role==="manager"),settings,req,user.name,myTurma.name,user.email||"")
     setSubmitted(true); setBusy(false)
   }
 
-  if(!myTurma) return <PageWrap><EmptyState icon={AlertTriangle} title="Turma não atribuída" sub="Solicite ao gerente que vincule você a uma turma."/></PageWrap>
+  // Non-manager without a turma — keep original error state
+  if(!isManager && !user.turmaId) return <PageWrap><EmptyState icon={AlertTriangle} title="Turma não atribuída" sub="Solicite ao gerente que vincule você a uma turma."/></PageWrap>
+
   if(submitted) return (
     <PageWrap>
       <div className="max-w-md mx-auto text-center py-16">
         <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4"><CheckCircle size={40} className="text-emerald-600"/></div>
         <h2 className="text-xl font-bold text-slate-800 mb-2">Requisição enviada!</h2>
-        <p className="text-slate-500 mb-6">O gerente foi notificado e analisará em breve.</p>
-        <Btn onClick={()=>{setItems([]);setNotes("");setExtraItems("");setSubmitted(false)}}><Plus size={16}/> Nova requisição</Btn>
+        <p className="text-slate-500 mb-6">A requisição foi registrada e aguarda aprovação.</p>
+        <Btn onClick={()=>{setItems([]);setNotes("");setExtraItems("");setSubmitted(false);setSelectedTurmaId(user.turmaId||"")}}><Plus size={16}/> Nova requisição</Btn>
       </div>
     </PageWrap>
   )
 
   return(
     <PageWrap>
-      <PageHeader title="Nova Requisição" sub={`${myTurma.name} · ${monthLabel(MONTH)}`}/>
-      <Card className="p-4 mb-6">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-700">Saldo disponível</span>
-          <span className={`text-sm font-bold ${available<0?"text-red-600":"text-emerald-600"}`}>{fmtCur(available)}</span>
-        </div>
-        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-          <div className="h-full bg-emerald-500 rounded-full" style={{width:`${Math.max(0,Math.min(100,(available/(budget?.amount||1))*100))}%`}}/>
-        </div>
-        <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Utilizado: {fmtCur(spent)}</span><span>Orçamento: {fmtCur(budget?.amount||0)}</span></div>
-      </Card>
+      <PageHeader title="Nova Requisição" sub={myTurma?`${myTurma.name} · ${monthLabel(MONTH)}`:monthLabel(MONTH)}/>
+
+      {/* Manager turma selector */}
+      {isManager&&(
+        <Card className="p-4 mb-4">
+          <Field label="Requisitar para qual turma?" required>
+            <Sel value={selectedTurmaId} onChange={e=>{setSelectedTurmaId(e.target.value);setItems([])}}>
+              <option value="">— Selecione a turma —</option>
+              {sortAlpha(db.turmas,"name","asc").map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            </Sel>
+          </Field>
+          {isManager&&<p className="text-xs text-slate-400 mt-2">Como gerente, você pode fazer requisições em nome de qualquer turma. A requisição passará pela aprovação normalmente.</p>}
+        </Card>
+      )}
+
+      {myTurma&&(
+        <Card className="p-4 mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-slate-700">Saldo disponível — {myTurma.name}</span>
+            <span className={`text-sm font-bold ${available<0?"text-red-600":"text-emerald-600"}`}>{fmtCur(available)}</span>
+          </div>
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-emerald-500 rounded-full" style={{width:`${Math.max(0,Math.min(100,(available/(budget?.amount||1))*100))}%`}}/>
+          </div>
+          <div className="flex justify-between text-xs text-slate-400 mt-1"><span>Utilizado: {fmtCur(spent)}</span><span>Orçamento: {fmtCur(budget?.amount||0)}</span></div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Catálogo */}
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Catálogo de insumos</p>
           <Card>
-            {/* Fix 4: real-time search */}
             <div className="px-3 pt-3 pb-2 border-b border-slate-50">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-                <input
-                  value={catalogSearch}
-                  onChange={e=>setCatalogSearch(e.target.value)}
-                  placeholder="Buscar material..."
-                  className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
+                <input value={catalogSearch} onChange={e=>setCatalogSearch(e.target.value)} placeholder="Buscar material..." className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
                 {catalogSearch&&<button onClick={()=>setCatalogSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><X size={14}/></button>}
               </div>
             </div>
@@ -1003,10 +1018,7 @@ function RequisicaoPage({db,saveKey,user,settings}){
                   <div key={ins.id} className="px-4 py-3 flex items-center justify-between">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-slate-800">{ins.name}</p>
-                      <p className="text-xs text-slate-400">
-                        {fmtCur(ins.price)}/{ins.unit} ·{" "}
-                        <span className={outOfStock?"text-red-500 font-medium":""}> Estoque: {ins.stockQty}</span>
-                      </p>
+                      <p className="text-xs text-slate-400">{fmtCur(ins.price)}/{ins.unit} · <span className={outOfStock?"text-red-500 font-medium":""}>Estoque: {ins.stockQty}</span></p>
                     </div>
                     <Btn size="sm" variant={inCart?"secondary":"primary"} onClick={()=>inCart?remItem(ins.id):addItem(ins)}>
                       {inCart?<><Check size={12}/> Adicionado</>:<><Plus size={12}/> Adicionar</>}
@@ -1017,19 +1029,14 @@ function RequisicaoPage({db,saveKey,user,settings}){
             </div>
           </Card>
 
-          {/* Fix 3: field for unlisted items */}
           <div className="mt-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Itens não cadastrados</p>
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-2">
               <p className="text-xs text-amber-800">Precisa de algo que não está no catálogo ou está sem estoque? Descreva aqui — o gerente avaliará.</p>
             </div>
-            <textarea
-              value={extraItems}
-              onChange={e=>setExtraItems(e.target.value)}
-              rows={3}
+            <textarea value={extraItems} onChange={e=>setExtraItems(e.target.value)} rows={3}
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
-              placeholder={"Ex: 3x Papel cartão amarelo A3\n1x Tinta guache azul 500ml\n..."}
-            />
+              placeholder={"Ex: 3x Papel cartão amarelo A3\n1x Tinta guache azul 500ml\n..."}/>
           </div>
         </div>
 
@@ -1076,13 +1083,14 @@ function RequisicaoPage({db,saveKey,user,settings}){
               <span className="text-slate-600">Total do catálogo</span>
               <span className={`font-bold ${budget&&total>available?"text-red-600":"text-slate-800"}`}>{fmtCur(total)}</span>
             </div>
-            {extraItems.trim()&&<div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2"><AlertTriangle size={12} className="flex-shrink-0 mt-0.5"/> Itens extras incluídos (sem valor definido — o gerente avaliará)</div>}
+            {extraItems.trim()&&<div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg p-2"><AlertTriangle size={12} className="flex-shrink-0 mt-0.5"/> Itens extras incluídos — sem valor definido</div>}
             {budget&&<div className="flex justify-between text-xs text-slate-400"><span>Saldo após aprovação</span><span className={available-total<0?"text-red-500":""}>{fmtCur(available-total)}</span></div>}
           </div>
 
-          <Btn className="w-full justify-center mt-4" onClick={submit} disabled={(items.length===0&&!extraItems.trim())||busy}>
+          <Btn className="w-full justify-center mt-4" onClick={submit} disabled={(items.length===0&&!extraItems.trim())||busy||(!myTurma)}>
             {busy?<Loader2 size={16} className="animate-spin"/>:<ClipboardList size={16}/>} Enviar Requisição
           </Btn>
+          {isManager&&!myTurma&&<p className="text-xs text-slate-400 text-center mt-2">Selecione uma turma acima para continuar.</p>}
         </div>
       </div>
     </PageWrap>
@@ -1393,6 +1401,8 @@ export default function App(){
       {id:"orcamentos",   label:"Orçamentos",          icon:DollarSign},
       {id:"aprovacoes",   label:"Aprovações",          icon:ClipboardList, badge:db.requisitions.filter(r=>r.status==="pending").length},
       {id:"entregas",     label:"Registro de Entregas",icon:Truck,         badge:pendingDeliveries.length},
+      {id:"requisicao",   label:"Nova Requisição",     icon:Plus},
+      {id:"minhasreqs",   label:"Minhas Requisições",  icon:ClipboardList},
       {id:"relatorios",   label:"Relatórios",          icon:BarChart2},
       {id:"notificacoes", label:"Notificações",        icon:Bell,          badge:notifCount},
       {id:"configuracoes",label:"Configurações",       icon:Settings},
