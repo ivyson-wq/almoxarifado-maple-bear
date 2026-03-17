@@ -308,7 +308,7 @@ function LoginScreen({users,settings}){
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({db,user,setPage,notifCount,pendingDeliveries}){
+function Dashboard({db,user,setPage,notifCount,pendingDeliveries,settings}){
   const isManager=user.role==="manager"
   const myTurma=db.turmas.find(t=>t.id===user.turmaId)
   const budget=myTurma?db.budgets.find(b=>b.turmaId===myTurma.id&&b.month===MONTH):null
@@ -317,8 +317,20 @@ function Dashboard({db,user,setPage,notifCount,pendingDeliveries}){
   const lowStock=db.insumos.filter(i=>i.stockQty<=5).length
   const recent=[...db.requisitions].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5)
   const getU=id=>db.users.find(u=>u.id===id); const getT=id=>db.turmas.find(t=>t.id===id)
+  const schoolName=settings?.school_name||"Maple Bear"
+  const logo=settings?.school_logo
   return(
     <PageWrap>
+      {/* Logo banner */}
+      <div className="flex flex-col items-center justify-center py-8 mb-6 rounded-2xl border border-slate-100 bg-white shadow-sm">
+        {logo
+          ? <img src={logo} alt={schoolName} className="h-24 w-auto object-contain mb-4"/>
+          : <div className="w-24 h-24 rounded-2xl bg-blue-600 flex items-center justify-center mb-4"><Package size={44} className="text-white"/></div>
+        }
+        <h2 className="text-2xl font-bold text-slate-800">{schoolName}</h2>
+        <p className="text-sm text-slate-400 mt-1 tracking-wide uppercase font-medium">Sistema de Almoxarifado</p>
+      </div>
+
       <PageHeader title={`Olá, ${user.name.split(" ")[0]}! 👋`} sub={`${monthLabel(MONTH)} · ${isManager?"Visão Gerencial":myTurma?.name||""}`}/>
       {isManager?(
         <>
@@ -1413,7 +1425,7 @@ export default function App(){
   ]
 
   const pageMap={
-    dashboard:    <Dashboard {...props} notifCount={notifCount} pendingDeliveries={pendingDeliveries}/>,
+    dashboard:    <Dashboard {...props} notifCount={notifCount} pendingDeliveries={pendingDeliveries} settings={settings}/>,
     usuarios:     <UsuariosPage {...props}/>,
     turmas:       <TurmasPage {...props}/>,
     insumos:      <InsumosPage {...props}/>,
