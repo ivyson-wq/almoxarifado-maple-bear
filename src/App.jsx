@@ -522,11 +522,23 @@ function ConfiguracoesPage({db,saveKey,settings,reloadSettings}){
   const [defBudget,setDefBudget]=useState(settings.default_budget_amount||"")
   const [applyMonth,setApplyMonth]=useState(MONTH)
 
+  // Sincroniza estados locais sempre que settings mudar (após salvar ou recarregar)
+  useEffect(()=>{
+    setSchoolName(settings.school_name||"Maple Bear")
+    setLogo(settings.school_logo||"")
+    setSvcId(settings.emailjs_service_id||"")
+    setTplId(settings.emailjs_template_id||"")
+    setPubKey(settings.emailjs_public_key||"")
+    setDefBudget(settings.default_budget_amount||"")
+  },[settings])
+
   const saveIdentidade = async()=>{
     setSaving(true); setMsg("")
-    await saveSetting("school_name",schoolName)
-    if(logo) await saveSetting("school_logo",logo)
-    await reloadSettings(); setMsg("Salvo com sucesso!"); setSaving(false)
+    await saveSetting("school_name", schoolName)
+    // Salva sempre — seja nova logo ou logo já existente
+    await saveSetting("school_logo", logo||"")
+    await reloadSettings()
+    setMsg("Salvo com sucesso!"); setSaving(false)
   }
   const saveEmail = async()=>{
     setSaving(true); setMsg("")
@@ -1390,7 +1402,10 @@ export default function App(){
     setSettings(cfg); setNotifCount(notifications.filter(n=>!n.read).length)
     setPendingDeliveries(computePending(requisitions,deliveries))
   }
-  const reloadSettings=async()=>{ const cfg=await fetchSettings(); setSettings(cfg) }
+  const reloadSettings=async()=>{
+    const cfg=await fetchSettings()
+    setSettings({...cfg}) // spread garante nova referência → força re-render em todos que consomem settings
+  }
 
   useEffect(()=>{
     reload().catch(e=>setDbError(e.message)).finally(()=>setLoading(false))
