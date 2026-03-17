@@ -187,10 +187,14 @@ const resizeLogo = file => new Promise(res => {
   r.onload = e => {
     const img = new Image()
     img.onload = () => {
-      const MAX=160, s=Math.min(1,MAX/Math.max(img.width,img.height))
-      const c=document.createElement("canvas"); c.width=img.width*s; c.height=img.height*s
-      c.getContext("2d").drawImage(img,0,0,c.width,c.height)
-      res(c.toDataURL("image/png",0.9))
+      // 512px preserva qualidade suficiente para exibição grande no dashboard
+      // sem comprometer demais o tamanho armazenado no banco
+      const MAX = 512
+      const s = Math.min(1, MAX / Math.max(img.width, img.height))
+      const c = document.createElement("canvas")
+      c.width = img.width * s; c.height = img.height * s
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height)
+      res(c.toDataURL("image/png", 0.92))
     }
     img.src = e.target.result
   }
@@ -327,7 +331,7 @@ function Dashboard({db,user,setPage,notifCount,pendingDeliveries,settings}){
       {/* Logo banner */}
       <div className="flex flex-col items-center justify-center py-8 mb-6 rounded-2xl border border-slate-100 bg-white shadow-sm">
         {logo
-          ? <img src={logo} alt={schoolName} className="h-24 w-auto object-contain mb-4"/>
+          ? <img src={logo} alt={schoolName} className="max-h-36 max-w-xs w-auto object-contain mb-4"/>
           : <div className="w-24 h-24 rounded-2xl bg-blue-600 flex items-center justify-center mb-4"><Package size={44} className="text-white"/></div>
         }
         <h2 className="text-2xl font-bold text-slate-800">{schoolName}</h2>
