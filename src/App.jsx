@@ -60,6 +60,9 @@ const FM = {
   created_at:"createdAt", approved_at:"approvedAt", rejected_at:"rejectedAt",
   approved_by:"approvedBy", rejected_by:"rejectedBy",
   requisition_id:"requisitionId", delivered_at:"deliveredAt", created_by:"createdBy",
+  category_id:"categoryId",
+  approved_total:"approvedTotal",
+  extra_items:"extraItems",
 }
 const FMR = Object.fromEntries(Object.entries(FM).map(([k,v])=>[v,k]))
 const toApp = o => o ? Object.fromEntries(Object.entries(o).map(([k,v])=>[FM[k]||k,v])) : o
@@ -1393,7 +1396,16 @@ export default function App(){
     reload().catch(e=>setDbError(e.message)).finally(()=>setLoading(false))
   },[])
 
-  const saveKey=async(table,newArr)=>{ await syncTable(table,db[table]||[],newArr); await reload() }
+  const saveKey=async(table,newArr)=>{
+    try {
+      await syncTable(table,db[table]||[],newArr)
+      await reload()
+    } catch(e) {
+      console.error(`saveKey(${table}) error:`,e)
+      alert(`Erro ao salvar (${table}): ${e?.message||e}\n\nVerifique o console para detalhes.`)
+      await reload()
+    }
+  }
   const saveSett=async(k,v)=>{ await saveSetting(k,v); await reloadSettings() }
 
   if(loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="text-center"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"/><p className="text-slate-500 text-sm">Conectando...</p></div></div>
